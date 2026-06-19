@@ -1,0 +1,389 @@
+// src/main/ipc/deepgramAgent.ts
+// Deepgram Voice Agent — STT + LLM + TTS in one WebSocket
+import { ipcMain, WebContents, webContents } from 'electron'
+import WebSocket from 'ws'
+import type { DeepgramVoice } from '../../shared/types'
+
+const AGENT_WS_URL = 'wss://agent.deepgram.com/v1/agent/converse'
+
+type AgentSession = {
+  ws: WebSocket
+  ownerId: number
+  buffer: ArrayBuffer[]
+  closed: boolean
+  keepalive?: ReturnType<typeof setInterval>
+}
+
+const sessions = new Map<string, AgentSession>()
+
+function emit(ownerId: number, channel: string, data: unknown): void {
+  const wc = webContents.fromId(ownerId)
+  if (wc && !wc.isDestroyed()) {
+    wc.send(channel, data)
+  }
+}
+
+type AgentMessage =
+  | { type: 'Welcome'; request_id: string }
+  | { type: 'SettingsApplied' }
+  | { type: 'ConversationText'; role: 'user' | 'assistant'; content: string }
+  | { type: 'AgentThinking'; content: string }
+  | { type: 'AgentStartedSpeaking'; total_latency: number; tts_latency: number; ttt_latency: number }
+  | { type: 'AgentAudioDone' }
+  | { type: 'Error'; description: string; code: string }
+  | { type: 'Warning'; description: string; code: string }
+  | { type: 'History'; role?: string; content?: string; function_calls?: unknown[] }
+  | { type: 'UserStartedSpeaking' }
+  | { type: string; [key: string]: unknown }
+
+function startAgentSession(
+  sessionId: string,
+  owner: WebContents,
+  apiKey: string,
+  config: AgentConfig
+): void {
+  const existing = sessions.get(sessionId)
+  if (existing) {
+    try { existing.ws.close() } catch { /* ignore */ }
+    sessions.delete(sessionId)
+  }
+
+  const url = AGENT_WS_URL
+  console.log(`[agent] connecting session ${sessionId}`)
+
+  const ws = new WebSocket(url, {
+    headers: {
+      Authorization: `Token ${apiKey}`
+    },
+    handshakeTimeout: 10000
+  })
+  ws.binaryType = 'arraybuffer'
+
+  const session: AgentSession = {
+    ws,
+    ownerId: owner.id,
+    buffer: [],
+    closed: false
+  }
+  sessions.set(sessionId, session)
+
+  ws.on('open', () => {
+    console.log(`[agent] session ${sessionId} connected, sending settings`)
+    // Send configuration
+    const systemPrompt = buildSystemPrompt(config)
+    const agentName = config.agentName || 'friend'
+    console.log(`[agent] system prompt: ${systemPrompt.substring(0, 200)}...`)
+
+    const settings: Record<string, unknown> = {
+      type: 'Settings',
+      audio: {
+        input: { encoding: 'linear16', sample_rate: 16000 },
+        output: { encoding: 'linear16', sample_rate: 24000 }
+      },
+      agent: {
+        language: config.language || 'en',
+        listen: {
+          provider: {
+            type: 'deepgram',
+            model: 'nova-3'
+          }
+        },
+        think: config.thinkProvider || {
+          provider: {
+            type: 'open_ai',
+            model: 'gpt-4o-mini'
+          },
+          prompt: systemPrompt
+        },
+        speak: {
+          provider: {
+            type: 'deepgram',
+            model: config.ttsVoice || 'aura-2-thalia-en'
+          }
+        },
+        greeting: config.greeting || `Hey! I'm ${agentName}. How can I help?`
+      }
+    }
+    console.log(`[agent] sending settings:`, JSON.stringify(settings, null, 2))
+    ws.send(JSON.stringify(settings))
+    // Flush buffered audio
+    for (const chunk of session.buffer) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(chunk)
+    }
+    session.buffer = []
+    // Keepalive
+    const keepalive = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'KeepAlive' }))
+      } else {
+        clearInterval(keepalive)
+      }
+    }, 8000)
+    session.keepalive = keepalive
+  })
+
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      // Binary audio from agent TTS — forward to renderer
+      emit(session.ownerId, 'deepgram-agent:audio', {
+        sessionId,
+        audio: Buffer.from(data as ArrayBuffer).toString('base64')
+      })
+      return
+    }
+
+    const text = data.toString().trim()
+    if (!text) return
+
+    let msg: AgentMessage
+    try {
+      msg = JSON.parse(text)
+    } catch {
+      return
+    }
+
+    console.log(`[agent] message: ${msg.type}`)
+
+    switch (msg.type) {
+      case 'Welcome':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'connected',
+          requestId: msg.request_id
+        })
+        break
+      case 'SettingsApplied':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'settingsApplied'
+        })
+        break
+      case 'ConversationText':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'conversationText',
+          role: msg.role,
+          content: msg.content
+        })
+        break
+      case 'AgentThinking':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'thinking',
+          content: msg.content
+        })
+        break
+      case 'AgentStartedSpeaking':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'agentSpeaking',
+          totalLatency: msg.total_latency,
+          ttsLatency: msg.tts_latency,
+          tttLatency: msg.ttt_latency
+        })
+        break
+      case 'AgentAudioDone':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'agentAudioDone'
+        })
+        break
+      case 'Error':
+        console.error(`[agent] error: ${msg.code} - ${msg.description}`)
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'error',
+          message: msg.description,
+          code: msg.code
+        })
+        break
+      case 'Warning':
+        console.warn(`[agent] warning: ${msg.code} - ${msg.description}`)
+        break
+      case 'History':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'history',
+          role: msg.role,
+          content: msg.content,
+          functionCalls: msg.function_calls
+        })
+        break
+      case 'UserStartedSpeaking':
+        emit(session.ownerId, 'deepgram-agent:message', {
+          sessionId,
+          kind: 'userSpeaking'
+        })
+        break
+      default:
+        console.log(`[agent] unhandled message type: ${msg.type}`)
+    }
+  })
+
+  ws.on('error', (err) => {
+    console.error(`[agent] session ${sessionId} error:`, err.message)
+    emit(session.ownerId, 'deepgram-agent:message', {
+      sessionId,
+      kind: 'error',
+      message: err.message,
+      fatal: true
+    })
+  })
+
+  ws.on('close', (code, reasonBuf) => {
+    if (session.closed) return
+    session.closed = true
+    if (session.keepalive) clearInterval(session.keepalive)
+    sessions.delete(sessionId)
+    console.log(`[agent] session ${sessionId} closed (${code})`)
+    emit(session.ownerId, 'deepgram-agent:message', {
+      sessionId,
+      kind: 'closed',
+      code,
+      reason: reasonBuf.toString()
+    })
+  })
+}
+
+function feedAgent(sessionId: string, pcm: ArrayBuffer): void {
+  const s = sessions.get(sessionId)
+  if (!s || s.closed) return
+  if (s.ws.readyState !== WebSocket.OPEN) {
+    s.buffer.push(pcm)
+    if (s.buffer.length > 200) s.buffer.shift()
+    return
+  }
+  s.ws.send(pcm)
+}
+
+function stopAgent(sessionId: string): void {
+  const s = sessions.get(sessionId)
+  if (!s) return
+  s.closed = true
+  if (s.keepalive) clearInterval(s.keepalive)
+  sessions.delete(sessionId)
+  try { s.ws.close(1000, 'client close') } catch { /* ignore */ }
+}
+
+export type AgentConfig = {
+  language?: string
+  systemPrompt?: string
+  ttsVoice?: string
+  greeting?: string
+  thinkProvider?: {
+    provider: { type: string; model: string }
+    prompt?: string
+  }
+  agentName?: string
+  personality?: string
+  activationMode?: 'wake-word' | 'always'
+  clarificationEnabled?: boolean
+}
+
+function buildSystemPrompt(config: AgentConfig): string {
+  const name = config.agentName || 'friend'
+  const personality = config.personality || 'warm, curious, and helpful'
+  const wakeWord = config.activationMode !== 'always'
+  const clarification = config.clarificationEnabled !== false
+
+  if (config.systemPrompt) return config.systemPrompt
+
+  let prompt = `You are ${name}, a voice assistant with this personality: ${personality}.
+
+Core rules:
+- You are a real-time voice assistant speaking through a microphone
+- Keep responses concise (1-3 sentences max) — this is a voice conversation, not text chat
+- Be natural and conversational, like a real friend
+- Never say "as an AI" or similar disclaimers
+- Match the user's energy and tone`
+
+  if (wakeWord) {
+    prompt += `
+
+Activation:
+- You are named "${name}" — the user must say your name to get your attention
+- When someone is talking to another person (not you), stay completely silent
+- Only speak when directly addressed by name (e.g. "friend, what do you think?")
+- If you're not sure if you were addressed, stay silent`
+  } else {
+    prompt += `
+
+Activation:
+- You respond to everything the user says
+- But if they seem to be talking to someone else, stay brief or silent`
+  }
+
+  if (clarification) {
+    prompt += `
+
+Clarification:
+- If you don't understand what the user means, ask a quick clarifying question
+- Examples: "Sorry, what do you mean by X?" or "Can you tell me more about that?"
+- Don't guess — it's better to ask than to give wrong advice
+- But ask concisely — one short question, not a paragraph`
+  }
+
+  prompt += `
+
+Conversation awareness:
+- You can hear the user's side of conversations with others
+- If the user asks for your opinion during a conversation, respond briefly
+- If the user seems busy or focused, don't interrupt
+- You can offer a quick suggestion if it's genuinely helpful, but keep it very short`
+
+  return prompt
+}
+
+let deepgramApiKey = ''
+
+export function setAgentApiKey(key: string): void {
+  deepgramApiKey = key
+}
+
+export function getAgentApiKey(): string {
+  return deepgramApiKey
+}
+
+export function registerDeepgramAgentHandlers(): void {
+  ipcMain.handle('deepgram-agent:start', (e, args: { sessionId: string; config?: AgentConfig }) => {
+    if (!deepgramApiKey) {
+      console.warn('[agent] no API key configured')
+      emit(e.sender.id, 'deepgram-agent:message', {
+        sessionId: args.sessionId,
+        kind: 'error',
+        message: 'Deepgram API key not configured',
+        fatal: true
+      })
+      return
+    }
+    startAgentSession(args.sessionId, e.sender, deepgramApiKey, args.config || {})
+  })
+
+  ipcMain.handle('deepgram-agent:stop', (_e, sessionId: string) => {
+    stopAgent(sessionId)
+  })
+
+  ipcMain.on('deepgram-agent:feed', (_e, sessionId: string, pcm: ArrayBuffer) => {
+    feedAgent(sessionId, pcm)
+  })
+
+  ipcMain.handle('deepgram-agent:listVoices', async () => {
+    // Return known Deepgram Aura voices
+    const voices: DeepgramVoice[] = [
+      { id: 'aura-2-thalia-en', name: 'Thalia', lang: 'en' },
+      { id: 'aura-2-asteria-en', name: 'Asteria', lang: 'en' },
+      { id: 'aura-2-luna-en', name: 'Luna', lang: 'en' },
+      { id: 'aura-2-stella-en', name: 'Stella', lang: 'en' },
+      { id: 'aura-2-athena-en', name: 'Athena', lang: 'en' },
+      { id: 'aura-2-hera-en', name: 'Hera', lang: 'en' },
+      { id: 'aura-2-orion-en', name: 'Orion', lang: 'en' },
+      { id: 'aura-2-arcas-en', name: 'Arcas', lang: 'en' },
+      { id: 'aura-2-perseus-en', name: 'Perseus', lang: 'en' },
+      { id: 'aura-2-angus-en', name: 'Angus', lang: 'en' },
+      { id: 'aura-2-orpheus-en', name: 'Orpheus', lang: 'en' },
+      { id: 'aura-2-helios-en', name: 'Helios', lang: 'en' },
+      { id: 'aura-2-zeus-en', name: 'Zeus', lang: 'en' }
+    ]
+    return voices
+  })
+}
