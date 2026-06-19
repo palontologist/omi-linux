@@ -1,6 +1,6 @@
-# omi-windows (Linux Fork)
+# omi-linux
 
-A voice-first AI assistant built on [Omi](https://github.com/BasedHardware/omi) — enhanced with Deepgram Voice Agent, MCP tool integration, and a configurable personality system. Runs on **NixOS/Linux** via AppImage.
+A voice-first AI assistant for Linux built on [Omi](https://github.com/BasedHardware/omi) — enhanced with Deepgram Voice Agent, MCP tool integration, and a configurable personality system. Runs on **NixOS/Linux** via AppImage.
 
 ## What it does
 
@@ -20,8 +20,8 @@ Speak naturally and the AI listens, thinks, and responds — all through one Dee
 
 ```bash
 # Clone
-git clone https://github.com/palontologist/omi-windows.git
-cd omi-windows
+git clone https://github.com/palontologist/omi-linux.git
+cd omi-linux
 
 # Install
 pnpm install
