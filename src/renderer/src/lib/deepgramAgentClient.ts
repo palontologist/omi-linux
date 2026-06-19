@@ -8,6 +8,7 @@ export type AgentCallbacks = {
   onAgentText?: (text: string) => void
   onAgentSpeaking?: (latency?: { total: number; tts: number; ttt: number }) => void
   onAgentAudioDone?: () => void
+  onFunctionCall?: (name: string, args: Record<string, unknown>, result: string) => void
   onError?: (msg: string) => void
   onClosed?: (code: number) => void
 }
@@ -87,6 +88,10 @@ export function startAgent(config?: AgentConfig, cb?: AgentCallbacks): string {
       case 'agentAudioDone':
         console.log('[agent] audio done')
         cb?.onAgentAudioDone?.()
+        break
+      case 'functionCall':
+        console.log(`[agent] function call: ${msg.name}(${JSON.stringify(msg.args)}) -> ${msg.result}`)
+        cb?.onFunctionCall?.(msg.name, msg.args, msg.result)
         break
       case 'error':
         console.error('[agent] error:', msg.message)

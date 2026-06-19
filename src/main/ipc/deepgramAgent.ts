@@ -36,6 +36,113 @@ type AgentMessage =
   | { type: 'UserStartedSpeaking' }
   | { type: string; [key: string]: unknown }
 
+// Tool execution functions
+async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+  switch (name) {
+    case 'web_search': {
+      const query = (args.query as string) || ''
+      try {
+        const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        })
+        const html = await res.text()
+        // Extract snippets from DuckDuckGo HTML results
+        const snippets: string[] = []
+        const regex = /class="result__snippet">(.*?)<\/a>/gs
+        let match
+        while ((match = regex.exec(html)) !== null && snippets.length < 3) {
+          const text = match[1].replace(/<[^>]+>/g, '').trim()
+          if (text) snippets.push(text)
+        }
+        return snippets.length > 0
+          ? `Search results for "${query}":\n${snippets.join('\n')}`
+          : `No results found for "${query}"`
+      } catch (e) {
+        return `Search failed: ${(e as Error).message}`
+      }
+    }
+    case 'get_time': {
+      const now = new Date()
+      return `Current time: ${now.toLocaleTimeString()} on ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`
+    }
+    case 'calculate': {
+      const expr = (args.expression as string) || ''
+      try {
+        // Safe math evaluation (no eval)
+        const result = Function('"use strict"; return (' + expr.replace(/[^0-9+\-*/().%\s]/g, '') + ')')()
+        return `${expr} = ${result}`
+      } catch {
+        return `Could not calculate "${expr}". Please check the expression.`
+      }
+    }
+    case 'set_reminder': {
+      const message = (args.message as string) || ''
+      const minutes = (args.minutes_from_now as number) || 0
+      // Schedule reminder via renderer notification
+      setTimeout(() => {
+        // Find any open window and send notification
+        const { BrowserWindow } = require('electron')
+        const wins = BrowserWindow.getAllWindows()
+        for (const win of wins) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('deepgram-agent:reminder', { message, triggeredAt: Date.now() })
+          }
+        }
+      }, minutes * 60 * 1000)
+      return `Reminder set: "${message}" in ${minutes} minute${minutes !== 1 ? 's' : ''}`
+    }
+    default:
+      return `Unknown tool: ${name}`
+  }
+}
+
+function handleFunctionCall(
+  session: AgentSession,
+  ws: WebSocket,
+  id: string,
+  name: string,
+  argsJson: string,
+  sessionId: string
+): void {
+  let args: Record<string, unknown> = {}
+  try {
+    args = JSON.parse(argsJson)
+  } catch { /* ignore */ }
+
+  console.log(`[agent] executing tool: ${name}(${JSON.stringify(args)})`)
+
+  executeTool(name, args).then((result) => {
+    console.log(`[agent] tool result: ${name} -> ${result.substring(0, 100)}...`)
+    // Send function call response back to Deepgram
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'SendFunctionCallResponse',
+        id,
+        name,
+        content: result
+      }))
+    }
+    // Also notify renderer
+    emit(session.ownerId, 'deepgram-agent:message', {
+      sessionId,
+      kind: 'functionCall',
+      name,
+      args,
+      result
+    })
+  }).catch((err) => {
+    console.error(`[agent] tool error: ${name}:`, err)
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'SendFunctionCallResponse',
+        id,
+        name,
+        content: `Error executing ${name}: ${(err as Error).message}`
+      }))
+    }
+  })
+}
+
 function startAgentSession(
   sessionId: string,
   owner: WebContents,
@@ -69,10 +176,51 @@ function startAgentSession(
 
   ws.on('open', () => {
     console.log(`[agent] session ${sessionId} connected, sending settings`)
-    // Send configuration
     const systemPrompt = buildSystemPrompt(config)
     const agentName = config.agentName || 'friend'
     console.log(`[agent] system prompt: ${systemPrompt.substring(0, 200)}...`)
+
+    const tools = [
+      {
+        name: 'web_search',
+        description: 'Search the web for current information. Use this when the user asks about news, facts, or anything you are not sure about.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'The search query' }
+          },
+          required: ['query']
+        }
+      },
+      {
+        name: 'get_time',
+        description: 'Get the current date and time.',
+        parameters: { type: 'object', properties: {} }
+      },
+      {
+        name: 'calculate',
+        description: 'Perform a mathematical calculation.',
+        parameters: {
+          type: 'object',
+          properties: {
+            expression: { type: 'string', description: 'Math expression to evaluate, e.g. "2 + 2" or "sqrt(144)"' }
+          },
+          required: ['expression']
+        }
+      },
+      {
+        name: 'set_reminder',
+        description: 'Set a reminder for the user.',
+        parameters: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', description: 'What to remind the user about' },
+            minutes_from_now: { type: 'number', description: 'Minutes from now to trigger the reminder' }
+          },
+          required: ['message', 'minutes_from_now']
+        }
+      }
+    ]
 
     const settings: Record<string, unknown> = {
       type: 'Settings',
@@ -88,12 +236,15 @@ function startAgentSession(
             model: 'nova-3'
           }
         },
-        think: config.thinkProvider || {
-          provider: {
-            type: 'open_ai',
-            model: 'gpt-4o-mini'
-          },
-          prompt: systemPrompt
+        think: {
+          ...(config.thinkProvider || {
+            provider: {
+              type: 'open_ai',
+              model: 'gpt-4o-mini'
+            }
+          }),
+          prompt: systemPrompt,
+          functions: tools
         },
         speak: {
           provider: {
@@ -104,7 +255,7 @@ function startAgentSession(
         greeting: config.greeting || `Hey! I'm ${agentName}. How can I help?`
       }
     }
-    console.log(`[agent] sending settings:`, JSON.stringify(settings, null, 2))
+    console.log(`[agent] sending settings with ${tools.length} tools`)
     ws.send(JSON.stringify(settings))
     // Flush buffered audio
     for (const chunk of session.buffer) {
@@ -215,6 +366,18 @@ function startAgentSession(
           kind: 'userSpeaking'
         })
         break
+      case 'FunctionCallRequest': {
+        const funcs = (msg as { functions?: Array<{ id: string; name: string; arguments: string; client_side: boolean }> }).functions || []
+        console.log(`[agent] function call request: ${funcs.length} functions`)
+        for (const fn of funcs) {
+          if (fn.client_side) {
+            handleFunctionCall(session, ws, fn.id, fn.name, fn.arguments, sessionId)
+          } else {
+            console.log(`[agent] server-side function: ${fn.name}`)
+          }
+        }
+        break
+      }
       default:
         console.log(`[agent] unhandled message type: ${msg.type}`)
     }
