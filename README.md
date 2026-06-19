@@ -1,60 +1,116 @@
-# omi-windows
+# omi-windows (Linux Fork)
 
-Omi for Windows — an Electron + React + TypeScript port of the Omi desktop app.
+A voice-first AI assistant built on [Omi](https://github.com/BasedHardware/omi) — enhanced with Deepgram Voice Agent, MCP tool integration, and a configurable personality system. Runs on **NixOS/Linux** via AppImage.
 
-## Recommended IDE Setup
+## What it does
 
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
+Speak naturally and the AI listens, thinks, and responds — all through one Deepgram WebSocket. It can search the web, do math, set reminders, and summarize your conversations. Say its name to wake it up, or let it listen passively in the background.
 
-## Run from source
+## Features
+
+- **Voice Agent** — Full STT + LLM + TTS pipeline via Deepgram's Voice Agent API
+- **Wake Word Activation** — Agent only responds when you say its name (configurable)
+- **Personality System** — Set a name, personality traits, and behavioral rules
+- **MCP Tools** — Web search, calculator, time, reminders (extensible)
+- **Transcript Summarizer** — Extract summaries, tasks, and key points via Gemini
+- **Deepgram Transcription** — Real-time speech-to-text with audio buffering
+- **NixOS/Wayland Support** — Mic permissions, PipeWire capture, AppImage build
+
+## Quick Start
 
 ```bash
-# 1. Install dependencies
-npm install
+# Clone
+git clone https://github.com/palontologist/omi-windows.git
+cd omi-windows
 
-# 2. Create your local env file (required — the app won't start without it)
+# Install
+pnpm install
+
+# Configure
 cp .env.example .env
+# Edit .env — add your Deepgram API key:
+# MAIN_VITE_DEEPGRAM_API_KEY=your_key_here
 
-# 3. Start the app
-npm run dev
+# Run in dev
+pnpm run dev
 ```
 
-`.env` is gitignored. `.env.example` ships with Omi's **public** Firebase + PostHog
-config, so after `cp .env.example .env` the app runs and sign-in works with no extra
-keys to obtain.
-
-## Authentication
-
-- **App sign-in:** each user signs in with **their own** Google/Omi account through
-  the built-in popup. The Firebase project is shared (Omi's `based-hardware`); accounts
-  are individual. Nothing to configure — it works out of the box from `.env.example`.
-- **Google integration** (optional Gmail/Google connect — separate from sign-in): bring
-  your own credentials. Create an OAuth **Desktop app** client in the
-  [Google Cloud Console](https://console.cloud.google.com/apis/credentials), then in your
-  local `.env` set `MAIN_VITE_GOOGLE_CLIENT_ID`, `MAIN_VITE_GOOGLE_CLIENT_SECRET`, and
-  `VITE_ENABLE_GOOGLE_INTEGRATION=1`. Keep these in your local `.env` only — never commit them.
-
-## Optional keys
-
-Everything below is blank in `.env.example` and safe to leave unset:
-
-- `VITE_OMI_API_KEY` — cloud-sync recorded conversations (generate in Omi → Settings →
-  Developer). Blank = recordings save locally only.
-- `MAIN_VITE_GOOGLE_CLIENT_ID` / `MAIN_VITE_GOOGLE_CLIENT_SECRET` /
-  `VITE_ENABLE_GOOGLE_INTEGRATION` — the Google integration above.
-
-## Build
+## Build for Linux
 
 ```bash
-# Windows
-npm run build:win
-
-# macOS
-npm run build:mac
-
-# Linux
-npm run build:linux
+pnpm run build:linux
 ```
 
-Vite inlines the `.env` values at build time, so a packaged installer needs no `.env` —
-the config is compiled into the binary.
+Output: `dist/omi-windows-1.0.0.AppImage`
+
+### Run on NixOS
+
+```bash
+appimage-run dist/omi-windows-1.0.0.AppImage
+```
+
+No FUSE needed. AppImage is extracted to `~/.cache/appimage-run/` automatically.
+
+## Configuration
+
+### .env
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MAIN_VITE_DEEPGRAM_API_KEY` | Yes | Deepgram API key for STT + Voice Agent |
+| `VITE_OMI_API_KEY` | No | Omi cloud sync (blank = local only) |
+| `MAIN_VITE_GOOGLE_CLIENT_ID` | No | Google OAuth for Gmail/Calendar |
+| `MAIN_VITE_GOOGLE_CLIENT_SECRET` | No | Google OAuth secret |
+
+### Voice Agent (Settings > General)
+
+- **Name** — Agent's name (default: "friend"). Say it to activate.
+- **Activation** — "Say name to activate" or "Always respond"
+- **Personality** — e.g. "warm, curious, sarcastic"
+- **Ask when unsure** — Agent asks clarifying questions
+
+### Voice Agent requires an LLM
+
+The Voice Agent uses Deepgram's think provider. Configure one in your [Deepgram Dashboard](https://console.deepgram.com) under Project Settings > Voice Agent:
+
+- OpenAI (gpt-4o-mini)
+- Google (gemini-2.0-flash)
+- Anthropic (claude-3-5-haiku)
+
+## Tools
+
+The voice agent can use these tools automatically:
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `web_search` | Search DuckDuckGo | "What's the news today?" |
+| `get_time` | Current date/time | "What time is it?" |
+| `calculate` | Math expressions | "What's 144 * 37?" |
+| `set_reminder` | Timed reminders | "Remind me to check email in 30 min" |
+
+Tools execute locally in the Electron main process. Results are sent back to the LLM for a spoken response.
+
+## Architecture
+
+```
+Renderer (React)          Main Process (Electron)         Deepgram
+─────────────────         ──────────────────────         ─────────
+Mic capture ──────────► Agent WS handler ──────────► Voice Agent API
+                              │                         (STT + LLM + TTS)
+                              ├──► Tool execution
+                              │    (web_search, calc...)
+                              │
+TTS playback ◄────────── Agent audio ◄────────────── TTS audio
+```
+
+## NixOS Notes
+
+- **No .deb/.snap** — Ruby/fpm dependency fails on NixOS. Use AppImage only.
+- **Mic permissions** — Electron's `setPermissionRequestHandler` + PipeWire flags handle Wayland.
+- **Disk space** — AppImage is ~168MB. Clean `~/.cache/appimage-run/` if low on space.
+
+## Credits
+
+- [Omi](https://github.com/BasedHardware/omi) — Original desktop app
+- [Deepgram](https://deepgram.com) — Voice Agent API (STT + LLM + TTS)
+- [Electron](https://electronjs.org) + [Vite](https://vitejs.dev)
