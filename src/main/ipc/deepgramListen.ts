@@ -73,7 +73,8 @@ function buildDeepgramUrl(apiKey: string, language: string): string {
     channels: '1',
     interim_results: 'true',
     speech_final: 'true',
-    utterance_end_ms: '1000'
+    utterance_end_ms: '1000',
+    sentiment: 'true'
   })
   if (language && language !== 'en') {
     params.set('language', language)
@@ -148,12 +149,16 @@ function startDeepgramSession(args: ListenStartArgs, owner: WebContents, apiKey:
           const duration = (obj.duration as number) || 0
           const start = (obj.start as number) || 0
 
+          // Extract sentiment if present
+          const sentiment = obj.sentiment as { sentiment: string; confidence: number } | undefined
+
           const segment: BackendSegment = {
             id: `dg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             text: alt.transcript,
             is_user: true, // Default to user; could use speech_final + speaker detection
             start: Math.round(start * 1000),
-            end: Math.round((start + duration) * 1000)
+            end: Math.round((start + duration) * 1000),
+            ...(sentiment ? { sentiment: sentiment.sentiment, sentimentScore: sentiment.confidence } : {})
           }
 
           emit(session.ownerId, {

@@ -22,6 +22,10 @@ export type BackendSegment = {
   person_id?: string
   start: number
   end: number
+  /** Sentiment label from Deepgram nova-3: 'positive', 'negative', or 'neutral' */
+  sentiment?: string
+  /** Confidence score for the sentiment classification (0-1) */
+  sentimentScore?: number
 }
 
 /** Non-segment messages the v4/listen socket may send (e.g. memory_creating,
@@ -309,6 +313,7 @@ export type OmiBridgeApi = {
   deepgramAgentFeed: (sessionId: string, pcm: ArrayBuffer) => void
   onDeepgramAgentMessage: (cb: (msg: AgentMessage) => void) => () => void
   onDeepgramAgentAudio: (cb: (msg: AgentAudioMessage) => void) => () => void
+  deepgramAgentOllamaCheck: () => Promise<{ ok: boolean; models?: string[]; error?: string }>
 }
 
 // --- Screen activity → memories (Rewind OCR synthesis) ---
@@ -746,7 +751,7 @@ export type AgentConfig = {
   ttsVoice?: string
   greeting?: string
   thinkProvider?: {
-    provider: { type: string; model: string }
+    provider: { type: string; model: string; baseUrl?: string }
     prompt?: string
   }
   // Personality
@@ -754,6 +759,23 @@ export type AgentConfig = {
   personality?: string // e.g. "warm, curious, helpful"
   activationMode?: 'wake-word' | 'always' // respond only when named, or to everything
   clarificationEnabled?: boolean // ask for clarification when unsure
+  // Context
+  conversationContext?: string // past conversation context to inject
+  sessionContext?: {
+    currentProject?: string
+    currentActivity?: string
+    recentFiles?: string[]
+  }
+  // Cloud memories from api.omi.me/v3/memories
+  memories?: Array<{ content: string; category?: string }>
+  // LLM provider selection: 'deepgram' | 'openai' | 'ollama'
+  llmProvider?: 'deepgram' | 'openai' | 'ollama'
+  // Custom model name (for ollama: e.g. "qwen3.5", for openai: "gpt-4o-mini")
+  llmModel?: string
+  // Custom base URL (for ollama: "http://localhost:11434/v1")
+  llmBaseUrl?: string
+  // OpenAI API key (for openai provider)
+  llmApiKey?: string
 }
 
 export type AgentMessage =

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useRecording } from './useRecording'
 import { startTranscription, type TranscriptionHandle } from '../lib/transcriptionClient'
 import { invalidateConversationsCache, refreshCloudConversations } from '../lib/pageCache'
+import { extractSummary } from '../lib/summaryClient'
+import { conversationSummaries } from '../lib/conversationSummaries'
 import type { CaptureSource, TranscriptLine } from '../../../shared/types'
 
 function linesToString(lines: TranscriptLine[], interim: string): string {
@@ -204,6 +206,16 @@ export function useRecorder(): UseRecorder {
         transcript,
         createdAt: Date.now()
       })
+      // Auto-summarize in background (non-blocking)
+      const allLines = [...micLines, ...systemLines]
+      if (allLines.length > 0) {
+        extractSummary(allLines).then((result) => {
+          conversationSummaries.set(session.conversationId, result)
+          console.log(`[recorder] auto-summarized: ${result.tasks.length} tasks, ${result.keyPoints.length} key points`)
+        }).catch((err) => {
+          console.error('[recorder] auto-summarize failed:', err)
+        })
+      }
       // Saved locally only (the dev API key 401s on Omi's read/reprocess
       // endpoints, so a pushed copy dead-ends). Cloud conversations are still
       // read from Omi elsewhere.

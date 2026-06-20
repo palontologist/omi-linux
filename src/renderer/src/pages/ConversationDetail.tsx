@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCw, Loader2, Trash2, Sparkles, Copy, Check } from 'lucide-react'
+import { RefreshCw, Loader2, Trash2, Sparkles, Copy, Check, ListChecks } from 'lucide-react'
 import { omiApi } from '../lib/apiClient'
 import { invalidateConversationsCache } from '../lib/pageCache'
+import { conversationSummaries } from '../lib/conversationSummaries'
 import { toast } from '../lib/toast'
 import type { ChatMessage } from '../../../shared/types'
 import { PageHeader } from '../components/layout/PageHeader'
@@ -143,6 +144,12 @@ export function ConversationDetail({ conversationId }: { conversationId: string 
           segments: c.transcript
             ? [{ text: c.transcript, speaker: 'SPEAKER_00', start: 0 }]
             : undefined,
+          overview: conversationSummaries.get(idStr)?.summary,
+          actionItems: conversationSummaries.get(idStr)?.tasks?.map((t, i) => ({
+            id: `auto-${i}`,
+            description: t,
+            completed: false
+          })),
           isLocal: true,
           processing: false
         })

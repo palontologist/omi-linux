@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { resolveHelperPath } from './resolveHelperPath'
 import { encodeRequest, FrameDecoder, OP_OCR, OP_WINDOW } from './helperProtocol'
+import { linuxOcr, isLinuxOcrAvailable } from './linuxOcr'
 import type { OcrResult, WindowInfo } from '../../shared/types'
 
 const REQUEST_TIMEOUT_MS = 5000
@@ -29,6 +30,8 @@ class HelperProcess {
   private unavailable = false
 
   private ensureStarted(): void {
+    // On Linux, we use Tesseract directly — no helper process needed
+    if (process.platform === 'linux') return
     if (this.child || this.starting || this.unavailable) return
     this.starting = true
     const exe = resolveHelperPath()
@@ -92,6 +95,10 @@ class HelperProcess {
   }
 
   private request(opcode: number, payload: Buffer): Promise<string> {
+    // On Linux, requests are handled directly (no helper process)
+    if (process.platform === 'linux') {
+      return Promise.reject(new Error('helper not available on Linux (using Tesseract)'))
+    }
     if (this.unavailable) return Promise.reject(new Error('helper unavailable (binary missing)'))
     this.ensureStarted()
     const child = this.child
@@ -110,6 +117,10 @@ class HelperProcess {
   }
 
   async ocr(jpeg: Buffer): Promise<OcrResult> {
+    // On Linux, use Tesseract directly instead of win-ocr-helper.exe
+    if (process.platform === 'linux' && isLinuxOcrAvailable()) {
+      return linuxOcr(jpeg)
+    }
     try {
       const json = await this.request(OP_OCR, jpeg)
       return JSON.parse(json) as OcrResult
@@ -119,6 +130,10 @@ class HelperProcess {
   }
 
   async windowInfo(): Promise<WindowInfo> {
+    // On Linux, window info is not available (win-ocr-helper is Windows-only)
+    if (process.platform === 'linux') {
+      return { app: 'unknown', title: '', processName: 'unknown' }
+    }
     const json = await this.request(OP_WINDOW, Buffer.alloc(0))
     return JSON.parse(json) as WindowInfo
   }

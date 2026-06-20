@@ -2,7 +2,11 @@
 // Deepgram Voice Agent — STT + LLM + TTS in one WebSocket
 import { ipcMain, WebContents, webContents } from 'electron'
 import WebSocket from 'ws'
+import fs from 'fs'
+import path from 'path'
+import { app } from 'electron'
 import type { DeepgramVoice } from '../../shared/types'
+import { listLocalConversations } from './db'
 
 const AGENT_WS_URL = 'wss://agent.deepgram.com/v1/agent/converse'
 
@@ -180,6 +184,10 @@ function startAgentSession(
     const agentName = config.agentName || 'friend'
     console.log(`[agent] system prompt: ${systemPrompt.substring(0, 200)}...`)
 
+    // Build conversation context from past sessions
+    const contextMessages = buildConversationContext()
+    console.log(`[agent] loaded ${contextMessages.length} past conversation entries`)
+
     const tools = [
       {
         name: 'web_search',
@@ -222,6 +230,43 @@ function startAgentSession(
       }
     ]
 
+    // Build think provider based on llmProvider config
+    let thinkProvider: { type: string; model: string; baseUrl?: string }
+    const llmProvider = config.llmProvider || 'deepgram'
+    const llmModel = config.llmModel
+    const llmBaseUrl = config.llmBaseUrl
+
+    switch (llmProvider) {
+      case 'ollama':
+        thinkProvider = {
+          type: 'open_ai',
+          model: llmModel || 'qwen3.5',
+          baseUrl: llmBaseUrl || 'http://localhost:11434/v1'
+        }
+        console.log(`[agent] using Ollama: ${thinkProvider.model} at ${thinkProvider.baseUrl}`)
+        break
+      case 'openai':
+        thinkProvider = {
+          type: 'open_ai',
+          model: llmModel || 'gpt-4o-mini'
+        }
+        console.log(`[agent] using OpenAI: ${thinkProvider.model}`)
+        break
+      case 'deepgram':
+      default:
+        thinkProvider = {
+          type: 'open_ai',
+          model: llmModel || 'gpt-4o-mini'
+        }
+        console.log(`[agent] using Deepgram hosted LLM: ${thinkProvider.model}`)
+        break
+    }
+
+    // Allow explicit thinkProvider config to override
+    if (config.thinkProvider) {
+      thinkProvider = config.thinkProvider.provider
+    }
+
     const settings: Record<string, unknown> = {
       type: 'Settings',
       audio: {
@@ -233,16 +278,12 @@ function startAgentSession(
         listen: {
           provider: {
             type: 'deepgram',
-            model: 'nova-3'
+            model: 'nova-3',
+            sentiment: true
           }
         },
         think: {
-          ...(config.thinkProvider || {
-            provider: {
-              type: 'open_ai',
-              model: 'gpt-4o-mini'
-            }
-          }),
+          provider: thinkProvider,
           prompt: systemPrompt,
           functions: tools
         },
@@ -252,10 +293,11 @@ function startAgentSession(
             model: config.ttsVoice || 'aura-2-thalia-en'
           }
         },
-        greeting: config.greeting || `Hey! I'm ${agentName}. How can I help?`
+        greeting: config.greeting || `Hey! I'm ${agentName}. How can I help?`,
+        ...(contextMessages.length > 0 ? { context: { messages: contextMessages } } : {})
       }
     }
-    console.log(`[agent] sending settings with ${tools.length} tools`)
+    console.log(`[agent] sending settings with ${tools.length} tools, ${contextMessages.length} context messages`)
     ws.send(JSON.stringify(settings))
     // Flush buffered audio
     for (const chunk of session.buffer) {
@@ -441,6 +483,60 @@ export type AgentConfig = {
   personality?: string
   activationMode?: 'wake-word' | 'always'
   clarificationEnabled?: boolean
+  conversationContext?: string
+  sessionContext?: {
+    currentProject?: string
+    currentActivity?: string
+    recentFiles?: string[]
+  }
+}
+
+function loadSoulMd(): string {
+  // Try app root first (dev/build), then resources path (packaged), then user config
+  const candidates = [
+    path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'soul.md'),
+    path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), 'resources', 'soul.md'),
+    path.join(app.getPath('home'), '.config', 'omi', 'soul.md'),
+    path.join(process.cwd(), 'soul.md')
+  ]
+  for (const p of candidates) {
+    try {
+      const content = fs.readFileSync(p, 'utf-8')
+      console.log(`[agent] loaded soul.md from: ${p}`)
+      return content
+    } catch { /* continue */ }
+  }
+  console.warn('[agent] no soul.md found, using default personality')
+  return ''
+}
+
+const MAX_HISTORY_CONVERSATIONS = 5
+const MAX_HISTORY_CHARS = 4000
+
+function buildConversationContext(): Array<{ type: string; role: string; content: string }> {
+  const messages: Array<{ type: string; role: string; content: string }> = []
+  try {
+    const conversations = listLocalConversations().slice(0, MAX_HISTORY_CONVERSATIONS)
+    if (conversations.length === 0) return messages
+
+    let totalChars = 0
+    for (const convo of conversations) {
+      const transcript = convo.transcript || ''
+      if (!transcript) continue
+      // Truncate individual transcripts to keep context manageable
+      const truncated = transcript.length > 800 ? transcript.slice(0, 800) + '…' : transcript
+      if (totalChars + truncated.length > MAX_HISTORY_CHARS) break
+      totalChars += truncated.length
+      messages.push({
+        type: 'History',
+        role: 'user',
+        content: `[Past conversation — ${new Date(convo.startedAt).toLocaleDateString()}]: ${truncated}`
+      })
+    }
+  } catch (err) {
+    console.error('[agent] failed to load conversation history:', err)
+  }
+  return messages
 }
 
 function buildSystemPrompt(config: AgentConfig): string {
@@ -451,7 +547,20 @@ function buildSystemPrompt(config: AgentConfig): string {
 
   if (config.systemPrompt) return config.systemPrompt
 
-  let prompt = `You are ${name}, a voice assistant with this personality: ${personality}.
+  // Try loading soul.md first — it defines the agent's core identity
+  const soulMd = loadSoulMd()
+  let prompt: string
+
+  if (soulMd) {
+    // soul.md is the base personality — user settings layer on top
+    prompt = soulMd
+    // Override name if specified in settings
+    if (name !== 'friend') {
+      prompt += `\n\nYour name is "${name}".`
+    }
+  } else {
+    // Fallback to built-in personality
+    prompt = `You are ${name}, a voice assistant with this personality: ${personality}.
 
 Core rules:
 - You are a real-time voice assistant speaking through a microphone
@@ -459,6 +568,7 @@ Core rules:
 - Be natural and conversational, like a real friend
 - Never say "as an AI" or similar disclaimers
 - Match the user's energy and tone`
+  }
 
   if (wakeWord) {
     prompt += `
@@ -493,6 +603,72 @@ Conversation awareness:
 - If the user asks for your opinion during a conversation, respond briefly
 - If the user seems busy or focused, don't interrupt
 - You can offer a quick suggestion if it's genuinely helpful, but keep it very short`
+
+  // Inject conversation context if provided
+  if (config.conversationContext) {
+    prompt += `
+
+Memory of past conversations:
+${config.conversationContext}
+
+Use this context to understand what the user has been working on. Reference it naturally: "Earlier you mentioned..." or "Last time we talked about..."`
+
+    prompt += `
+
+Memory:
+- You have access to the user's recent conversation history
+- Reference past discussions naturally
+- You remember the user's projects, interests, and ongoing tasks
+- Use this context to provide relevant, personalized help`
+  }
+
+  // Inject session context
+  if (config.sessionContext) {
+    if (config.sessionContext.currentProject) {
+      prompt += `
+
+Current project: ${config.sessionContext.currentProject}
+- You're helping with this project right now
+- Be ready to help with coding, debugging, or planning`
+    }
+
+    if (config.sessionContext.currentActivity) {
+      prompt += `
+
+Current activity: ${config.sessionContext.currentActivity}
+- Adapt your responses to match what the user is doing`
+    }
+
+    if (config.sessionContext.recentFiles?.length) {
+      prompt += `
+
+Recent files:
+${config.sessionContext.recentFiles.map((f) => `- ${f}`).join('\n')}
+- Be aware of these when answering questions`
+    }
+  }
+
+  // Inject cloud memories if provided
+  if (config.memories && config.memories.length > 0) {
+    const memoryList = config.memories
+      .slice(0, 20)
+      .map((m) => `- ${m.content}`)
+      .join('\n')
+    prompt += `
+
+What you know about the user:
+${memoryList}
+
+Use these memories to personalize your responses. Reference them naturally when relevant, but don't recite them all at once. You know the user's projects, interests, and preferences.`
+  }
+
+  prompt += `
+
+Workflow:
+- Use web_search when you need current information
+- Use calculate for any math
+- Use set_reminder when the user wants to remember something
+- Be proactive: if the user mentions a task, offer to set a reminder`
 
   return prompt
 }
@@ -548,5 +724,22 @@ export function registerDeepgramAgentHandlers(): void {
       { id: 'aura-2-zeus-en', name: 'Zeus', lang: 'en' }
     ]
     return voices
+  })
+
+  // Ollama health check — verifies local LLM is reachable
+  ipcMain.handle('deepgram-agent:ollamaCheck', async () => {
+    try {
+      const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json() as { models?: Array<{ name: string }> }
+        return {
+          ok: true,
+          models: (data.models ?? []).map((m) => m.name)
+        }
+      }
+      return { ok: false, error: `HTTP ${res.statusCode}` }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
   })
 }

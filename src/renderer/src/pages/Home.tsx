@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Send } from 'lucide-react'
+import { Send, Mic, Square, MessageSquarePlus, Bluetooth, BluetoothConnected } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import type { User } from 'firebase/auth'
 import { auth, onAuthStateChanged } from '../lib/firebase'
 import { useAppState } from '../state/AppStateProvider'
@@ -12,6 +13,8 @@ import omiMark from '../assets/omi-logo.png'
 import { maybeStartScreenSynthesis } from '../lib/screenSynthesis'
 import { maybeStartInsightEngine } from '../lib/insightEngine'
 import { maybeStartRetentionSweep } from '../lib/retentionSweep'
+import { isAgentRunning } from '../lib/deepgramAgentClient'
+import { omiBleClient, type OmiDeviceState } from '../lib/omiBleClient'
 
 function firstName(u: User | null): string {
   const display = u?.displayName?.trim().split(/\s+/)[0]
@@ -38,11 +41,24 @@ function ChatBar(props: {
   onChange: (v: string) => void
   onSend: () => void
   sending: boolean
+  onNewChat?: () => void
+  onRecord?: () => void
+  recording?: boolean
 }): React.JSX.Element {
   // Solid (no backdrop-blur): a blurred bar re-rasterizes every frame during the
   // bar's slide, which made that transition feel laggy.
   return (
     <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-[color:var(--surface)] px-3 py-1.5">
+      {props.onNewChat && (
+        <button
+          onClick={props.onNewChat}
+          aria-label="New chat"
+          title="Start new conversation"
+          className="shrink-0 rounded-xl bg-white/[0.06] p-2.5 text-white/50 transition-colors hover:bg-white/[0.12] hover:text-white/80"
+        >
+          <MessageSquarePlus className="h-4 w-4" />
+        </button>
+      )}
       <input
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
@@ -52,6 +68,21 @@ function ChatBar(props: {
         placeholder="Ask Omi…"
         className="flex-1 border-0 bg-transparent px-2 py-2 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-0"
       />
+      {props.onRecord && (
+        <button
+          onClick={props.onRecord}
+          aria-label={props.recording ? 'Stop recording' : 'Start recording'}
+          title={props.recording ? 'Stop recording' : 'Record audio'}
+          className={cn(
+            'shrink-0 rounded-xl p-2.5 transition-colors',
+            props.recording
+              ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+              : 'bg-white/[0.06] text-white/50 hover:bg-white/[0.12] hover:text-white/80'
+          )}
+        >
+          {props.recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+        </button>
+      )}
       <button
         disabled={props.sending}
         onClick={props.onSend}
@@ -66,10 +97,20 @@ function ChatBar(props: {
 
 export function Home(): React.JSX.Element {
   const { chat } = useAppState()
+  const navigate = useNavigate()
   const [user, setUser] = useState<User | null>(auth.currentUser)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const widgetsGridRef = useRef<HTMLDivElement>(null)
   const lastLenRef = useRef(0)
+  const [recording, setRecording] = useState(false)
+  const [deviceState, setDeviceState] = useState<OmiDeviceState>('disconnected')
+
+  useEffect(() => {
+    const unsub = omiBleClient.on({
+      onStateChange: (s) => setDeviceState(s)
+    })
+    return unsub
+  }, [])
 
   // Windowed history rendering: an infinite thread can hold thousands of
   // messages, so we only render the last `visibleCount` and reveal older ones a
@@ -327,9 +368,41 @@ export function Home(): React.JSX.Element {
                 )
               })
             ) : !started ? (
-              <h1 className="fade-in-slow pb-2 text-center font-display text-4xl font-semibold tracking-tight text-white">
-                Hi, {firstName(user)}
-              </h1>
+              <div className="flex flex-col items-center gap-4">
+                <h1 className="fade-in-slow pb-2 text-center font-display text-4xl font-semibold tracking-tight text-white">
+                  Hi, {firstName(user)}
+                </h1>
+                <button
+                  onClick={async () => {
+                    if (deviceState === 'connected') {
+                      omiBleClient.disconnect()
+                    } else {
+                      const device = await omiBleClient.scan()
+                      if (device) {
+                        await omiBleClient.connect(device)
+                      }
+                    }
+                  }}
+                  className={cn(
+                    'fade-in-slow flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors',
+                    deviceState === 'connected'
+                      ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                      : 'bg-white/[0.06] text-white/60 hover:bg-white/[0.12] hover:text-white/80'
+                  )}
+                >
+                  {deviceState === 'connected' ? (
+                    <>
+                      <BluetoothConnected className="h-4 w-4" />
+                      Omi Connected
+                    </>
+                  ) : (
+                    <>
+                      <Bluetooth className="h-4 w-4" />
+                      Connect Omi Device
+                    </>
+                  )}
+                </button>
+              </div>
             ) : null}
           </div>
         </div>
@@ -338,7 +411,23 @@ export function Home(): React.JSX.Element {
       {/* Chat bar — rides to the bottom via the spacer collapse. */}
       <div className="py-3">
         <div className="fade-in-slow mx-auto max-w-4xl">
-          <ChatBar value={input} onChange={setInput} onSend={handleSend} sending={chat.sending} />
+          <ChatBar
+            value={input}
+            onChange={setInput}
+            onSend={handleSend}
+            sending={chat.sending}
+            recording={recording}
+            onNewChat={() => chat.reset()}
+            onRecord={() => {
+              if (recording) {
+                setRecording(false)
+                navigate('/conversations')
+              } else {
+                setRecording(true)
+                navigate('/conversations/live')
+              }
+            }}
+          />
         </div>
       </div>
 

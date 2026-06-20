@@ -1,11 +1,13 @@
-import { useState } from 'react'
-import { MessagesSquare, Mic, Volume2, Bot, FileText, User } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { MessagesSquare, Mic, Volume2, Bot, FileText, User, Bluetooth, BluetoothConnected } from 'lucide-react'
 import { getPreferences, setPreferences } from '../../../lib/preferences'
 import { SettingRow } from '../SettingRow'
 import { speak, stop as stopTTS } from '../../../lib/ttsService'
 import { startAgent, stopAgent, isAgentRunning } from '../../../lib/deepgramAgentClient'
 import { extractSummary, type SummaryResult } from '../../../lib/summaryClient'
 import { liveConversation } from '../../../lib/liveConversation'
+import { omiApi } from '../../../lib/apiClient'
+import { omiBleClient, type OmiDeviceState, type OmiDeviceInfo } from '../../../lib/omiBleClient'
 import type { AgentConfig } from '../../../../shared/types'
 import {
   getMonologurSettings,
@@ -38,6 +40,22 @@ export function GeneralTab(): React.JSX.Element {
   const [personality, setPersonality] = useState(() => loadAgentSettings().personality || 'warm, curious, and helpful')
   const [activationMode, setActivationMode] = useState<'wake-word' | 'always'>(() => loadAgentSettings().activationMode || 'wake-word')
   const [clarificationEnabled, setClarificationEnabled] = useState(() => loadAgentSettings().clarificationEnabled !== false)
+  const [llmProvider, setLlmProvider] = useState<'deepgram' | 'openai' | 'ollama'>(() => loadAgentSettings().llmProvider || 'deepgram')
+  const [llmModel, setLlmModel] = useState(() => loadAgentSettings().llmModel || '')
+  const [llmBaseUrl, setLlmBaseUrl] = useState(() => loadAgentSettings().llmBaseUrl || 'http://localhost:11434/v1')
+  const [ollamaStatus, setOllamaStatus] = useState<{ checked: boolean; ok: boolean; models: string[] }>({ checked: false, ok: false, models: [] })
+  const [deviceState, setDeviceState] = useState<OmiDeviceState>('disconnected')
+  const [deviceInfo, setDeviceInfo] = useState<OmiDeviceInfo | null>(null)
+  const [deviceBattery, setDeviceBattery] = useState<number | null>(null)
+
+  useEffect(() => {
+    const unsub = omiBleClient.on({
+      onStateChange: (s) => setDeviceState(s),
+      onDeviceInfo: (info) => setDeviceInfo(info),
+      onBatteryLevel: (b) => setDeviceBattery(b)
+    })
+    return unsub
+  }, [])
 
   return (
     <>
@@ -147,31 +165,49 @@ export function GeneralTab(): React.JSX.Element {
                 value={agentName}
                 onChange={(e) => {
                   setAgentName(e.target.value)
-                  saveAgentSettings({ agentName: e.target.value, personality, activationMode, clarificationEnabled })
+                  saveAgentSettings({ agentName: e.target.value, personality, activationMode, clarificationEnabled, llmProvider, llmModel, llmBaseUrl })
                 }}
                 placeholder="Agent name"
                 className="w-24 rounded-md bg-white/10 px-2 py-1.5 text-sm text-white focus:outline-none"
               />
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (agentActive) {
                     stopAgent()
                     setAgentActive(false)
                   } else {
+                    // Load memories before starting agent
+                    const loadMemories = async (): Promise<Array<{ content: string; category?: string }>> => {
+                      try {
+                        const r = await omiApi.get('/v3/memories', { params: { limit: 20, offset: 0 } })
+                        const data = r.data as { memories?: Array<{ content: string; category?: string }> } | Array<{ content: string; category?: string }>
+                        const memories = Array.isArray(data) ? data : (data.memories ?? [])
+                        return memories.map((m) => ({ content: m.content, category: m.category }))
+                      } catch {
+                        return []
+                      }
+                    }
+                    const memories = await loadMemories()
                     const config: AgentConfig = {
                       agentName,
                       personality,
                       activationMode,
                       clarificationEnabled,
-                      ttsVoice: 'aura-2-thalia-en'
+                      ttsVoice: 'aura-2-thalia-en',
+                      memories,
+                      llmProvider,
+                      llmModel: llmModel || undefined,
+                      llmBaseUrl: llmBaseUrl || undefined
                     }
+                    // Use Omi device as audio source if connected, otherwise mic
+                    const audioSource = deviceState === 'connected' ? 'omi-device' : 'mic'
                     startAgent(config, {
                       onConnected: () => console.log('[voice-agent] connected'),
                       onUserText: (t) => console.log('[voice-agent] user:', t),
                       onAgentText: (t) => console.log('[voice-agent] agent:', t),
                       onClosed: () => setAgentActive(false),
                       onError: (e) => { console.error('[voice-agent] error:', e); setAgentActive(false) }
-                    })
+                    }, audioSource)
                     setAgentActive(true)
                   }
                 }}
@@ -190,7 +226,7 @@ export function GeneralTab(): React.JSX.Element {
                 onChange={(e) => {
                   const v = e.target.value as 'wake-word' | 'always'
                   setActivationMode(v)
-                  saveAgentSettings({ agentName, personality, activationMode: v, clarificationEnabled })
+                  saveAgentSettings({ agentName, personality, activationMode: v, clarificationEnabled, llmProvider, llmModel, llmBaseUrl })
                 }}
                 className="rounded-md bg-white/10 px-2 py-1 text-white focus:outline-none"
               >
@@ -203,7 +239,7 @@ export function GeneralTab(): React.JSX.Element {
                   checked={clarificationEnabled}
                   onChange={(e) => {
                     setClarificationEnabled(e.target.checked)
-                    saveAgentSettings({ agentName, personality, activationMode, clarificationEnabled: e.target.checked })
+                    saveAgentSettings({ agentName, personality, activationMode, clarificationEnabled: e.target.checked, llmProvider, llmModel, llmBaseUrl })
                   }}
                   className="rounded"
                 />
@@ -215,11 +251,115 @@ export function GeneralTab(): React.JSX.Element {
               value={personality}
               onChange={(e) => {
                 setPersonality(e.target.value)
-                saveAgentSettings({ agentName, personality: e.target.value, activationMode, clarificationEnabled })
+                saveAgentSettings({ agentName, personality: e.target.value, activationMode, clarificationEnabled, llmProvider, llmModel, llmBaseUrl })
               }}
               placeholder="Personality traits"
               className="w-full rounded-md bg-white/10 px-2 py-1.5 text-xs text-white/70 focus:outline-none"
             />
+            <div className="flex gap-2 text-xs">
+              <select
+                value={llmProvider}
+                onChange={(e) => {
+                  const v = e.target.value as 'deepgram' | 'openai' | 'ollama'
+                  setLlmProvider(v)
+                  saveAgentSettings({ agentName, personality, activationMode, clarificationEnabled, llmProvider: v, llmModel, llmBaseUrl })
+                  if (v === 'ollama') {
+                    window.omi.deepgramAgentOllamaCheck().then((r) => {
+                      setOllamaStatus({ checked: true, ok: r.ok, models: r.models ?? [] })
+                    })
+                  }
+                }}
+                className="rounded-md bg-white/10 px-2 py-1 text-white focus:outline-none"
+              >
+                <option value="deepgram" className="bg-neutral-900">Deepgram (hosted)</option>
+                <option value="openai" className="bg-neutral-900">OpenAI</option>
+                <option value="ollama" className="bg-neutral-900">Ollama (local)</option>
+              </select>
+              {llmProvider === 'ollama' && (
+                <>
+                  <input
+                    type="text"
+                    value={llmModel}
+                    onChange={(e) => {
+                      setLlmModel(e.target.value)
+                      saveAgentSettings({ agentName, personality, activationMode, clarificationEnabled, llmProvider, llmModel: e.target.value, llmBaseUrl })
+                    }}
+                    placeholder="Model (e.g. qwen3.5)"
+                    className="w-32 rounded-md bg-white/10 px-2 py-1 text-white focus:outline-none"
+                  />
+                  <button
+                    onClick={async () => {
+                      const r = await window.omi.deepgramAgentOllamaCheck()
+                      setOllamaStatus({ checked: true, ok: r.ok, models: r.models ?? [] })
+                    }}
+                    className="rounded-md bg-white/10 px-2 py-1 text-white/60 hover:text-white"
+                  >
+                    {ollamaStatus.checked ? (ollamaStatus.ok ? 'Connected' : 'Offline') : 'Check'}
+                  </button>
+                </>
+              )}
+              {llmProvider === 'openai' && (
+                <input
+                  type="text"
+                  value={llmModel}
+                  onChange={(e) => {
+                    setLlmModel(e.target.value)
+                    saveAgentSettings({ agentName, personality, activationMode, clarificationEnabled, llmProvider, llmModel: e.target.value, llmBaseUrl })
+                  }}
+                  placeholder="Model (e.g. gpt-4o-mini)"
+                  className="w-32 rounded-md bg-white/10 px-2 py-1 text-white focus:outline-none"
+                />
+              )}
+            </div>
+            {llmProvider === 'ollama' && ollamaStatus.checked && ollamaStatus.models.length > 0 && (
+              <div className="text-xs text-white/40">
+                Available: {ollamaStatus.models.slice(0, 5).join(', ')}
+              </div>
+            )}
+          </div>
+        }
+      />
+
+      <SettingRow
+        icon={deviceState === 'connected' ? BluetoothConnected : Bluetooth}
+        title="Omi Device"
+        subtitle={deviceState === 'connected'
+          ? `Connected: ${deviceInfo?.name || 'Omi'}${deviceBattery !== null ? ` (${deviceBattery}%)` : ''}`
+          : 'Connect your Omi wearable via Bluetooth to stream audio directly'}
+        keywords="omi device bluetooth ble wearable hardware"
+        control={
+          <div className="flex items-center gap-2">
+            {deviceState === 'connected' ? (
+              <>
+                {deviceInfo?.firmwareRevision && (
+                  <span className="text-xs text-white/40">v{deviceInfo.firmwareRevision}</span>
+                )}
+                {deviceBattery !== null && (
+                  <span className="text-xs text-white/40">{deviceBattery}%</span>
+                )}
+                <button
+                  onClick={() => omiBleClient.disconnect()}
+                  className="rounded-md bg-red-500/20 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/30"
+                >
+                  Disconnect
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={async () => {
+                  const device = await omiBleClient.scan()
+                  if (device) {
+                    await omiBleClient.connect(device)
+                  }
+                }}
+                disabled={deviceState === 'scanning' || deviceState === 'connecting'}
+                className="rounded-md bg-blue-500/20 px-3 py-1.5 text-sm font-medium text-blue-400 hover:bg-blue-500/30 disabled:opacity-50"
+              >
+                {deviceState === 'scanning' ? 'Scanning...' :
+                 deviceState === 'connecting' ? 'Connecting...' :
+                 'Connect'}
+              </button>
+            )}
           </div>
         }
       />

@@ -9,7 +9,8 @@ import {
   CheckSquare,
   Check,
   MessageSquare,
-  Radio
+  Radio,
+  ListChecks
 } from 'lucide-react'
 import { omiApi } from '../lib/apiClient'
 import {
@@ -21,6 +22,7 @@ import {
   reconcilePending,
   type ConversationRow
 } from '../lib/pageCache'
+import { conversationSummaries } from '../lib/conversationSummaries'
 import { PageHeader } from '../components/layout/PageHeader'
 import { EmptyState } from '../components/ui/EmptyState'
 import type { LocalConversation } from '../../../shared/types'
@@ -57,14 +59,21 @@ function localToRow(c: LocalConversation): ConversationRow {
     : isChat
       ? '(empty chat)'
       : '(empty transcript)'
+  // Check for auto-generated tasks
+  const summary = conversationSummaries.get(c.id)
+  const taskCount = summary?.tasks?.length ?? 0
+  const baseSubtitle = isChat
+    ? `${new Date(c.startedAt).toLocaleString()} · ${c.messages?.length ?? 0} messages`
+    : `${new Date(c.startedAt).toLocaleString()} · ${Math.round(
+        (c.endedAt - c.startedAt) / 1000
+      )}s`
+  const subtitle = taskCount > 0
+    ? `${baseSubtitle} · ${taskCount} task${taskCount === 1 ? '' : 's'}`
+    : baseSubtitle
   return {
     id: c.id,
     title: c.title || (isChat ? 'Chat with Omi' : 'Local recording'),
-    subtitle: isChat
-      ? `${new Date(c.startedAt).toLocaleString()} · ${c.messages?.length ?? 0} messages`
-      : `${new Date(c.startedAt).toLocaleString()} · ${Math.round(
-          (c.endedAt - c.startedAt) / 1000
-        )}s`,
+    subtitle,
     preview,
     source: 'local',
     localKind: isChat ? 'chat' : 'recording',
@@ -433,11 +442,17 @@ export function Conversations(): React.JSX.Element {
                           <div className="mt-1 text-xs text-text-quaternary">{r.subtitle}</div>
                         )}
                       </div>
-                      {r.localKind === 'chat' ? (
-                        <span className="badge shrink-0">Chat</span>
-                      ) : r.source === 'local' ? (
-                        <span className="badge-warning shrink-0">Not synced</span>
-                      ) : null}
+                        {r.localKind === 'chat' ? (
+                          <span className="badge shrink-0">Chat</span>
+                        ) : r.source === 'local' ? (
+                          <span className="badge-warning shrink-0">Not synced</span>
+                        ) : null}
+                        {conversationSummaries.get(r.id)?.tasks && (
+                          <span className="badge shrink-0 ml-1">
+                            <ListChecks className="mr-1 h-3 w-3" />
+                            {conversationSummaries.get(r.id)!.tasks.length}
+                          </span>
+                        )}
                     </button>
                   ) : (
                     <Link
@@ -455,6 +470,12 @@ export function Conversations(): React.JSX.Element {
                           r.source === 'local' && (
                             <span className="badge-warning shrink-0">Not synced</span>
                           )
+                        )}
+                        {conversationSummaries.get(r.id)?.tasks && (
+                          <span className="badge shrink-0 ml-1">
+                            <ListChecks className="mr-1 h-3 w-3" />
+                            {conversationSummaries.get(r.id)!.tasks.length}
+                          </span>
                         )}
                       </div>
                       {r.subtitle && (

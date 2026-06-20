@@ -349,13 +349,24 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
     setHistory([])
     setSending(false)
     sendingRef.current = false
-    // Per-launch: forget the id so the next send creates a NEW conversation.
-    // Infinite: keep the shared id — reset is only a fresh on-screen view of the
-    // same ongoing thread, not a new conversation.
-    if (mode !== 'infinite') {
-      chatIdRef.current = null
-      startedAtRef.current = 0
-    }
+    // Always create a fresh conversation ID so the next send starts a new thread.
+    chatIdRef.current = null
+    startedAtRef.current = 0
+    // Re-resolve the id immediately so the next send picks up the new one.
+    chatIdRef.current = resolveChatId(
+      mode,
+      {
+        get: () => localStorage.getItem('omi-chat-infinite-id'),
+        set: (id) => {
+          try {
+            localStorage.setItem('omi-chat-infinite-id', id)
+          } catch {
+            /* private mode / quota */
+          }
+        }
+      },
+      () => `chat-${crypto.randomUUID()}`
+    )
   }
 
   return { history, sending, send, reset }

@@ -189,7 +189,9 @@ const omi: OmiBridgeApi = {
     const listener = (_e: Electron.IpcRendererEvent, msg: AgentAudioMessage): void => cb(msg)
     ipcRenderer.on('deepgram-agent:audio', listener)
     return () => ipcRenderer.removeListener('deepgram-agent:audio', listener)
-  }
+  },
+  deepgramAgentOllamaCheck: (): Promise<{ ok: boolean; models?: string[]; error?: string }> =>
+    ipcRenderer.invoke('deepgram-agent:ollamaCheck')
 }
 
 const omiOverlay: OmiOverlayApi = {
