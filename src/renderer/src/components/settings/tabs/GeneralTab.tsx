@@ -233,6 +233,21 @@ export function GeneralTab(): React.JSX.Element {
                 <option value="wake-word" className="bg-neutral-900">Say "{agentName}" to activate</option>
                 <option value="always" className="bg-neutral-900">Always respond</option>
               </select>
+              <select
+                value={loadAgentSettings().language || 'en'}
+                onChange={(e) => {
+                  const v = e.target.value
+                  saveAgentSettings({ ...loadAgentSettings(), language: v })
+                }}
+                className="rounded-md bg-white/10 px-2 py-1 text-white focus:outline-none"
+              >
+                <option value="en" className="bg-neutral-900">English</option>
+                <option value="es" className="bg-neutral-900">Español</option>
+                <option value="fr" className="bg-neutral-900">Français</option>
+                <option value="de" className="bg-neutral-900">Deutsch</option>
+                <option value="zh" className="bg-neutral-900">中文</option>
+                <option value="ja" className="bg-neutral-900">日本語</option>
+              </select>
               <label className="flex items-center gap-1 text-white/60">
                 <input
                   type="checkbox"

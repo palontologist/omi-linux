@@ -746,7 +746,7 @@ export type DeepgramTtsResult = {
 // --- Deepgram Voice Agent (STT + LLM + TTS) ---
 
 export type AgentConfig = {
-  language?: string
+  language?: string // BCP-47 language code (e.g. 'en', 'es', 'fr')
   systemPrompt?: string
   ttsVoice?: string
   greeting?: string

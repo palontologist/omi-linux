@@ -1,12 +1,12 @@
 // src/main/ipc/deepgramAgent.ts
 // Deepgram Voice Agent — STT + LLM + TTS in one WebSocket
-import { ipcMain, WebContents, webContents } from 'electron'
+import { ipcMain, WebContents, webContents, shell } from 'electron'
 import WebSocket from 'ws'
 import fs from 'fs'
 import path from 'path'
 import { app } from 'electron'
 import type { DeepgramVoice } from '../../shared/types'
-import { listLocalConversations } from './db'
+import { listLocalConversations, queryKgNodes } from './db'
 
 const AGENT_WS_URL = 'wss://agent.deepgram.com/v1/agent/converse'
 
@@ -77,6 +77,38 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         return `${expr} = ${result}`
       } catch {
         return `Could not calculate "${expr}". Please check the expression.`
+      }
+    }
+    case 'search_local_memories': {
+      const query = (args.query as string) || ''
+      try {
+        const graph = queryKgNodes(query)
+        if (graph.nodes.length === 0) return 'No relevant local memories found.'
+        const context = graph.nodes.map(n => `[${n.nodeType}] ${n.label}: ${n.summary}`).join('\n')
+        return `Relevant local memories:\n${context}`
+      } catch (e) {
+        return `Memory search failed: ${(e as Error).message}`
+      }
+    }
+    case 'write_file': {
+      const filePath = args.filePath as string
+      const content = args.content as string
+      try {
+        const dir = path.dirname(filePath)
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(filePath, content, 'utf8')
+        return `File written successfully to ${filePath}`
+      } catch (e) {
+        return `Failed to write file: ${(e as Error).message}`
+      }
+    }
+    case 'open_url': {
+      const url = args.url as string
+      try {
+        shell.openExternal(url)
+        return `Opened ${url} in the browser.`
+      } catch (e) {
+        return `Failed to open URL: ${(e as Error).message}`
       }
     }
     case 'set_reminder': {
@@ -217,6 +249,40 @@ function startAgentSession(
         }
       },
       {
+        name: 'search_local_memories',
+        description: 'Search the user\'s local knowledge graph for personal memories, preferences, and project details.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'The search query to find relevant local memories' }
+          },
+          required: ['query']
+        }
+      },
+      {
+        name: 'write_file',
+        description: 'Write text or code to a file on the local system. Use this to build games, scripts, or documents.',
+        parameters: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: 'The absolute path where the file should be saved' },
+            content: { type: 'string', description: 'The content to write to the file' }
+          },
+          required: ['filePath', 'content']
+        }
+      },
+      {
+        name: 'open_url',
+        description: 'Open a URL or a local file path in the default browser or application.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'The URL or file path to open' }
+          },
+          required: ['url']
+        }
+      },
+      {
         name: 'set_reminder',
         description: 'Set a reminder for the user.',
         parameters: {
@@ -278,8 +344,9 @@ function startAgentSession(
         listen: {
           provider: {
             type: 'deepgram',
-            model: 'nova-3',
-            sentiment: true
+            model: 'nova-2',
+            sentiment: true,
+            diarize: true
           }
         },
         think: {
@@ -470,26 +537,6 @@ function stopAgent(sessionId: string): void {
   try { s.ws.close(1000, 'client close') } catch { /* ignore */ }
 }
 
-export type AgentConfig = {
-  language?: string
-  systemPrompt?: string
-  ttsVoice?: string
-  greeting?: string
-  thinkProvider?: {
-    provider: { type: string; model: string }
-    prompt?: string
-  }
-  agentName?: string
-  personality?: string
-  activationMode?: 'wake-word' | 'always'
-  clarificationEnabled?: boolean
-  conversationContext?: string
-  sessionContext?: {
-    currentProject?: string
-    currentActivity?: string
-    recentFiles?: string[]
-  }
-}
 
 function loadSoulMd(): string {
   // Try app root first (dev/build), then resources path (packaged), then user config
@@ -560,50 +607,55 @@ function buildSystemPrompt(config: AgentConfig): string {
     }
   } else {
     // Fallback to built-in personality
-    prompt = `You are ${name}, a voice assistant with this personality: ${personality}.
-
+    prompt = `You are ${name}, a high-intelligence voice companion. You are sharp, concise, and genuinely helpful.
+    
 Core rules:
-- You are a real-time voice assistant speaking through a microphone
-- Keep responses concise (1-3 sentences max) — this is a voice conversation, not text chat
-- Be natural and conversational, like a real friend
-- Never say "as an AI" or similar disclaimers
-- Match the user's energy and tone`
+- You are a real-time voice assistant. Keep responses extremely concise (1-2 sentences) unless asked for detail.
+- Be natural, conversational, and a bit witty. Avoid "AI-speak".
+- Never say "as an AI" or use disclaimes.
+- Match the user's energy. If they are brief, be brief. If they are excited, be excited.`
   }
-
+  
   if (wakeWord) {
     prompt += `
-
-Activation:
-- You are named "${name}" — the user must say your name to get your attention
-- When someone is talking to another person (not you), stay completely silent
-- Only speak when directly addressed by name (e.g. "friend, what do you think?")
-- If you're not sure if you were addressed, stay silent`
+    
+Activation & Crowded Rooms:
+- You are named "${name}". Only respond when directly addressed by name.
+- In crowded environments, use speaker diarization to ignore background chatter.
+- If multiple people are talking, only engage if you are specifically called.
+- Stay completely silent if you are not the focus of the conversation.`
   } else {
     prompt += `
-
+    
 Activation:
-- You respond to everything the user says
-- But if they seem to be talking to someone else, stay brief or silent`
+- You respond to everything the user says, but be sharp and avoid rambling.
+- If you sense the user is talking to someone else, stay brief or silent.`
   }
-
+  
   if (clarification) {
     prompt += `
-
+    
 Clarification:
-- If you don't understand what the user means, ask a quick clarifying question
-- Examples: "Sorry, what do you mean by X?" or "Can you tell me more about that?"
-- Don't guess — it's better to ask than to give wrong advice
-- But ask concisely — one short question, not a paragraph`
+- If a request is ambiguous, ask one sharp clarifying question. Don't guess.
+- Keep it short: "Which project do you mean?" not "I'm not sure which project you're referring to, could you please clarify?"`
   }
-
+  
   prompt += `
-
+  
+Intelligence & Memory:
+- You have a local knowledge graph of the user's life, projects, and preferences.
+- ALWAYS use 'search_local_memories' before answering questions about the user's history or preferences.
+- Don't just recite memories; use them to provide personalized, smart insights.
+- If the user shares a new idea or fact, encourage them or note that you'll remember it.
+  
+Action Capability:
+- You can build things. Use 'write_file' to create code/documents and 'open_url' to show the result.
+- If asked to "build a game" or "create a site", write the necessary files and then open the main file in the browser.
+  
 Conversation awareness:
-- You can hear the user's side of conversations with others
-- If the user asks for your opinion during a conversation, respond briefly
-- If the user seems busy or focused, don't interrupt
-- You can offer a quick suggestion if it's genuinely helpful, but keep it very short`
-
+- You hear the user's side of conversations. Offer brief, high-value insights only when genuinely helpful.
+- Be the "smartest person in the room" who knows when to speak and when to listen.`
+  
   // Inject conversation context if provided
   if (config.conversationContext) {
     prompt += `
@@ -737,7 +789,7 @@ export function registerDeepgramAgentHandlers(): void {
           models: (data.models ?? []).map((m) => m.name)
         }
       }
-      return { ok: false, error: `HTTP ${res.statusCode}` }
+      return { ok: false, error: `HTTP ${res.status}` }
     } catch (e) {
       return { ok: false, error: (e as Error).message }
     }
