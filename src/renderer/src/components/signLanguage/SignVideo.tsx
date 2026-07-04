@@ -1,11 +1,26 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
+import { resolveOmiAsset } from '../../utils/assetResolver'
 
 type SignVideoProps = {
   videoUrl: string | null
 }
 
 export function SignVideo({ videoUrl }: SignVideoProps) {
-  if (!videoUrl) {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    async function resolve() {
+      if (videoUrl) {
+        const resolved = await resolveOmiAsset(videoUrl);
+        setResolvedUrl(resolved);
+      } else {
+        setResolvedUrl(null);
+      }
+    }
+    resolve();
+  }, [videoUrl]);
+
+  if (!videoUrl || !resolvedUrl) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 text-xs italic">
         Waiting for translation...
@@ -16,8 +31,8 @@ export function SignVideo({ videoUrl }: SignVideoProps) {
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-transparent">
       <video 
-        key={videoUrl}
-        src={videoUrl} 
+        key={resolvedUrl}
+        src={resolvedUrl} 
         autoPlay 
         loop 
         muted 

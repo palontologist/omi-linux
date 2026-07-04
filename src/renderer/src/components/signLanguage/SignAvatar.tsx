@@ -1,23 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
+import { resolveOmiAsset } from '../../utils/assetResolver'
 
 type SignAvatarProps = {
   poseUrl: string | null
-}
-
-async function resolveSrc(url: string | null): Promise<string | null> {
-  if (!url) return null;
-  if (url.startsWith('http') || url.startsWith('omi-asset://')) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
-      const blob = await response.blob();
-      return URL.createObjectURL(blob);
-    } catch (e) {
-      console.error('[SignAvatar] Failed to resolve pose URL, using original:', e);
-      return url;
-    }
-  }
-  return url;
 }
 
 declare global {
@@ -31,6 +16,7 @@ declare global {
 export function SignAvatar({ poseUrl }: SignAvatarProps) {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
   const viewerRef = useRef<any>(null)
 
   useEffect(() => {
@@ -53,16 +39,15 @@ export function SignAvatar({ poseUrl }: SignAvatarProps) {
 
   useEffect(() => {
     async function updatePose() {
-      if (viewerRef.current && poseUrl) {
-        const resolvedUrl = await resolveSrc(poseUrl);
-        console.log('[SignAvatar] Setting src to:', resolvedUrl);
-        viewerRef.current.src = resolvedUrl;
-        viewerRef.current.setAttribute('src', resolvedUrl);
+      if (poseUrl) {
+        const resolved = await resolveOmiAsset(poseUrl);
+        setResolvedUrl(resolved);
+      } else {
+        setResolvedUrl(null);
       }
     }
     updatePose();
   }, [poseUrl]);
-
 
   if (error) {
     return (
@@ -82,21 +67,22 @@ export function SignAvatar({ poseUrl }: SignAvatarProps) {
 
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-transparent">
-      {ready ? (
+      {ready && resolvedUrl ? (
         <pose-viewer
           ref={viewerRef}
-          src={poseUrl}
+          src={resolvedUrl}
           renderer="svg"
           style={{ width: '100%', height: '100%', display: 'block' }}
         />
       ) : (
         <div className="flex items-center justify-center text-xs italic text-gray-400">
-          Loading pose viewer…
+          {ready ? 'Loading pose asset...' : 'Loading pose viewer…'}
         </div>
       )}
       <div className="absolute top-2 left-2 text-[10px] text-white/30 pointer-events-none font-mono">
-        Ready: {String(ready)} | URL: {poseUrl ? 'Yes' : 'No'}
+        Ready: {String(ready)} | Resolved: {String(!!resolvedUrl)}
       </div>
     </div>
   );
 }
+
