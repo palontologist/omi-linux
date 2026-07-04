@@ -5,7 +5,7 @@ import WebSocket from 'ws'
 import fs from 'fs'
 import path from 'path'
 import { app } from 'electron'
-import type { DeepgramVoice } from '../../shared/types'
+import type { AgentConfig, DeepgramVoice } from '../../shared/types'
 import { listLocalConversations, queryKgNodes } from './db'
 
 const AGENT_WS_URL = 'wss://agent.deepgram.com/v1/agent/converse'
@@ -588,7 +588,6 @@ function buildConversationContext(): Array<{ type: string; role: string; content
 
 function buildSystemPrompt(config: AgentConfig): string {
   const name = config.agentName || 'friend'
-  const personality = config.personality || 'warm, curious, and helpful'
   const wakeWord = config.activationMode !== 'always'
   const clarification = config.clarificationEnabled !== false
 

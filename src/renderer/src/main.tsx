@@ -1,9 +1,12 @@
 import './styles/globals.css'
-
+import { defineCustomElements } from 'pose-viewer/loader'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { SandboxBadge } from './components/SandboxBadge'
+
+// Initialize custom elements for pose-viewer immediately on startup
+defineCustomElements();
 
 // Startup-phase mark: all module imports above are now evaluated (including the
 // App graph, which dynamically — not statically — pulls in @huggingface/

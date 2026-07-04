@@ -15,8 +15,6 @@ const CODEC_TYPE_UUID = '19b10002-e8f2-537e-4f6c-d104768a1214'
 
 // Codec types
 const CODEC_PCM = 0
-const CODEC_OPUS = 1
-
 export type OmiDeviceState = 'disconnected' | 'scanning' | 'connecting' | 'connected'
 
 export type OmiDeviceInfo = {
@@ -38,7 +36,7 @@ class OmiBleClient {
   private device: BluetoothDevice | null = null
   private server: BluetoothRemoteGATTServer | null = null
   private audioCharacteristic: BluetoothRemoteGATTCharacteristic | null = null
-  private codecCharacteristic: BluetoothRemoteGGATTCharacteristic | null = null
+  private codecCharacteristic: BluetoothRemoteGATTCharacteristic | null = null
   private state: OmiDeviceState = 'disconnected'
   private callbacks: OmiBleCallbacks = {}
   private currentCodec = CODEC_PCM
@@ -100,15 +98,21 @@ class OmiBleClient {
     this.setState('connecting')
 
     try {
-      if (!d.gatt.connected) {
-        this.server = await d.gatt.connect()
+      const gatt = d.gatt
+      if (!gatt) throw new Error('Bluetooth GATT server unavailable')
+
+      if (!gatt.connected) {
+        this.server = await gatt.connect()
       } else {
-        this.server = d.gatt
+        this.server = gatt
       }
+
+      const server = this.server
+      if (!server) throw new Error('Bluetooth server unavailable')
 
       // Get device info
       try {
-        const infoService = await this.server.getPrimaryService(DEVICE_INFO_SERVICE_UUID)
+        const infoService = await server.getPrimaryService(DEVICE_INFO_SERVICE_UUID)
         const firmwareChar = await infoService.getCharacteristic(0x2A26)
         const firmwareValue = await firmwareChar.readValue()
         const firmwareRevision = new TextDecoder().decode(firmwareValue)
@@ -124,7 +128,7 @@ class OmiBleClient {
 
       // Get battery level
       try {
-        const batteryService = await this.server.getPrimaryService(BATTERY_SERVICE_UUID)
+        const batteryService = await server.getPrimaryService(BATTERY_SERVICE_UUID)
         const batteryChar = await batteryService.getCharacteristic(0x2A19)
         const batteryValue = await batteryChar.readValue()
         const batteryLevel = batteryValue.getUint8(0)
@@ -134,8 +138,10 @@ class OmiBleClient {
       }
 
       // Get audio service
-      const audioService = await this.server.getPrimaryService(AUDIO_SERVICE_UUID)
+      const audioService = await server.getPrimaryService(AUDIO_SERVICE_UUID)
       this.audioCharacteristic = await audioService.getCharacteristic(AUDIO_DATA_UUID)
+      const audioCharacteristic = this.audioCharacteristic
+      if (!audioCharacteristic) throw new Error('Audio characteristic unavailable')
 
       // Try to get codec characteristic
       try {
@@ -147,11 +153,11 @@ class OmiBleClient {
       }
 
       // Start notifications on audio characteristic
-      await this.audioCharacteristic.startNotifications()
-      this.audioCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+      await audioCharacteristic.startNotifications()
+      audioCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
         const value = (event as Event).target as BluetoothRemoteGATTCharacteristic
         if (value.value) {
-          this.callbacks.onAudioData?.(value.value.buffer, this.currentCodec)
+          this.callbacks.onAudioData?.(value.value.buffer as ArrayBuffer, this.currentCodec)
         }
       })
 
@@ -173,7 +179,7 @@ class OmiBleClient {
   }
 
   disconnect(): void {
-    if (this.device?.gatt.connected) {
+    if (this.device?.gatt?.connected) {
       this.device.gatt.disconnect()
     }
     this.handleDisconnect()

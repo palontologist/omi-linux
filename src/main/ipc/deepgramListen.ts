@@ -3,6 +3,7 @@
 import { ipcMain, WebContents, webContents } from 'electron'
 import WebSocket from 'ws'
 import https from 'https'
+import { translateToGlosses } from '../integrations/signLanguage'
 import type { BackendSegment, ListenEvent, ListenMessage, ListenStartArgs } from '../../shared/types'
 
 const DEEPGRAM_WS_URL = 'wss://api.deepgram.com/v1/listen'
@@ -65,9 +66,9 @@ function testApiKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
   })
 }
 
-function buildDeepgramUrl(apiKey: string, language: string): string {
+function buildDeepgramUrl(language: string): string {
   const params = new URLSearchParams({
-    model: 'nova-3',
+    model: 'nova-2',
     encoding: 'linear16',
     sample_rate: '16000',
     channels: '1',
@@ -89,7 +90,7 @@ function startDeepgramSession(args: ListenStartArgs, owner: WebContents, apiKey:
     sessions.delete(args.sessionId)
   }
 
-  const url = buildDeepgramUrl(apiKey, args.language)
+  const url = buildDeepgramUrl(args.language)
   console.log(`[deepgram] connecting to: ${url}`)
   console.log(`[deepgram] API key: ${apiKey.substring(0, 8)}...${apiKey.substring(apiKey.length - 4)}`)
 
@@ -145,27 +146,40 @@ function startDeepgramSession(args: ListenStartArgs, owner: WebContents, apiKey:
       if (alternatives && alternatives.length > 0) {
         const alt = alternatives[0]
         if (alt.transcript && alt.transcript.trim()) {
-          const isFinal = obj.is_final === true
           const duration = (obj.duration as number) || 0
           const start = (obj.start as number) || 0
 
           // Extract sentiment if present
           const sentiment = obj.sentiment as { sentiment: string; confidence: number } | undefined
 
-          const segment: BackendSegment = {
-            id: `dg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            text: alt.transcript,
-            is_user: true, // Default to user; could use speech_final + speaker detection
-            start: Math.round(start * 1000),
-            end: Math.round((start + duration) * 1000),
-            ...(sentiment ? { sentiment: sentiment.sentiment, sentimentScore: sentiment.confidence } : {})
-          }
+           const segment: BackendSegment = {
+             id: `dg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+             text: alt.transcript,
+             is_user: true, // Default to user; could use speech_final + speaker detection
+             start: Math.round(start * 1000),
+             end: Math.round((start + duration) * 1000),
+             ...(sentiment ? { sentiment: sentiment.sentiment, sentimentScore: sentiment.confidence } : {})
+           }
+ 
+           emit(session.ownerId, {
+             sessionId: args.sessionId,
+             kind: 'segments',
+             segments: [segment]
+           })
 
-          emit(session.ownerId, {
-            sessionId: args.sessionId,
-            kind: 'segments',
-            segments: [segment]
-          })
+            // Trigger Sign Language Translation for BOTH final and interim results
+            // to make the avatar feel more responsive.
+             console.log(`[deepgram] Triggering translation for: "${alt.transcript}"`);
+             translateToGlosses(alt.transcript).then(result => {
+               console.log(`[sign-language] translation success for: "${alt.transcript}"`, result);
+               // Broadcast to all windows so the Overlay window can see it even if the Main window started the session
+               webContents.getAllWebContents().forEach(wc => {
+                 if (!wc.isDestroyed()) {
+                   wc.send('omi-sign-update', result)
+                 }
+               });
+             }).catch(err => console.error('[sign-language] translation error:', err))
+
         }
       }
       return

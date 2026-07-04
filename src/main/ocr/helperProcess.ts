@@ -132,7 +132,7 @@ class HelperProcess {
   async windowInfo(): Promise<WindowInfo> {
     // On Linux, window info is not available (win-ocr-helper is Windows-only)
     if (process.platform === 'linux') {
-      return { app: 'unknown', title: '', processName: 'unknown' }
+      return { app: 'unknown', title: '', pid: 0, processName: 'unknown' }
     }
     const json = await this.request(OP_WINDOW, Buffer.alloc(0))
     return JSON.parse(json) as WindowInfo

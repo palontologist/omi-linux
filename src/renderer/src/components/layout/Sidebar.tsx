@@ -22,6 +22,7 @@ const navItems = [
   { label: 'Conversations', to: '/conversations', Icon: GanttChartSquare },
   { label: 'Tasks', to: '/tasks', Icon: ListChecks },
   { label: 'Rewind', to: '/rewind', Icon: History },
+  { label: 'Sign Language', to: '/sign-language', Icon: Monitor },
   { label: 'Apps', to: '/apps', Icon: LayoutGrid }
 ]
 

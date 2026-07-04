@@ -6,6 +6,7 @@ import { usePushToTalk } from '../../hooks/usePushToTalk'
 import { auth } from '../../lib/firebase'
 import { Waveform } from './Waveform'
 import { ChatMessages } from '../chat/ChatMessages'
+import { SignLanguageOverlay } from '../signLanguage/SignOverlay'
 import './overlay.css'
 
 /** Slim draggable strip with a centered grab handle. The whole strip is a drag
@@ -364,7 +365,10 @@ export function OverlayApp(): React.JSX.Element {
   // already reports the halved height, so the window auto-sizes to it.
   return (
     <div ref={setShellRef}>
-      <div className="overlay-zoom">{content}</div>
+      <div className="overlay-zoom">
+        {content}
+        <SignLanguageOverlay />
+      </div>
     </div>
   )
 }

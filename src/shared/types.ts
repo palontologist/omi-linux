@@ -1,3 +1,17 @@
+export type SignGloss = {
+  gloss: string
+  duration: number
+  timestamp: number
+  swr?: string
+}
+
+export type TranslationResult = {
+  originalText: string
+  poseUrl?: string
+  glosses: SignGloss[]
+  swrFull?: string
+}
+
 export type CaptureSource = {
   id: string
   name: string
@@ -235,6 +249,7 @@ export type OmiBridgeApi = {
   googleGmailFetchNew: () => Promise<FetchNewResult<GmailItem>>
   googleCalendarFetchNew: () => Promise<FetchNewResult<CalendarItem>>
   googleMarkProcessed: (source: GoogleSource, ids: string[]) => Promise<void>
+  signLanguageTranslate: (text: string) => Promise<TranslationResult>
   rewindFrames: (from: number, to: number) => Promise<RewindFrame[]>
   rewindDayBounds: () => Promise<{ min: number; max: number } | null>
   rewindSearch: (query: string) => Promise<RewindSearchGroup[]>
@@ -301,6 +316,7 @@ export type OmiBridgeApi = {
   screenSynthAdvanceWatermark: (ts: number) => Promise<void>
   screenSynthRecordRun: (run: ScreenSynthRun) => Promise<void>
   // Deepgram integration
+  deepgramListenTestKey: () => Promise<{ ok: boolean; error?: string }>
   deepgramListenStart: (args: ListenStartArgs) => Promise<void>
   deepgramListenStop: (sessionId: string) => Promise<void>
   deepgramListenFeed: (sessionId: string, pcm: ArrayBuffer) => void
@@ -313,6 +329,7 @@ export type OmiBridgeApi = {
   deepgramAgentFeed: (sessionId: string, pcm: ArrayBuffer) => void
   onDeepgramAgentMessage: (cb: (msg: AgentMessage) => void) => () => void
   onDeepgramAgentAudio: (cb: (msg: AgentAudioMessage) => void) => () => void
+  onDeepgramSignUpdate: (cb: (result: TranslationResult) => void) => () => void
   deepgramAgentOllamaCheck: () => Promise<{ ok: boolean; models?: string[]; error?: string }>
 }
 
@@ -595,7 +612,11 @@ export type OcrLine = {
 }
 export type OcrResult =
   | { ok: true; fullText: string; lines: OcrLine[] }
-  | { ok: false; code: 'NO_LANGUAGE' | 'DECODE_FAILED' | 'HELPER_ERROR'; message?: string }
+  | {
+      ok: false
+      code: 'NO_LANGUAGE' | 'DECODE_FAILED' | 'HELPER_ERROR' | 'TESSERACT_NOT_FOUND' | 'TESSERACT_ERROR'
+      message?: string
+    }
 
 /** Foreground window info from the Win32 side of the helper. */
 export type WindowInfo = { app: string; title: string; pid: number; processName: string }
@@ -785,6 +806,7 @@ export type AgentMessage =
   | { sessionId: string; kind: 'thinking'; content: string }
   | { sessionId: string; kind: 'agentSpeaking'; totalLatency: number; ttsLatency: number; tttLatency: number }
   | { sessionId: string; kind: 'agentAudioDone' }
+  | { sessionId: string; kind: 'functionCall'; name: string; args: Record<string, unknown>; result: string }
   | { sessionId: string; kind: 'error'; message: string; code?: string; fatal?: boolean }
   | { sessionId: string; kind: 'closed'; code: number; reason: string }
   | { sessionId: string; kind: 'history'; role?: string; content?: string; functionCalls?: unknown[] }

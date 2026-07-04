@@ -1,7 +1,7 @@
 appId: com.omiwindows.app
 productName: Omi for Windows
 directories:
-  buildResources: build
+  buildResources: resources
 files:
   # Explicit default; positive patterns below would otherwise replace it.
   - '**/*'

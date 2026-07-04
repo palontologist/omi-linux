@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { readStickyNotes } from '../integrations/stickyNotes'
 import { connect, disconnect, isConnected, connectedEmail } from '../integrations/oauth'
 import { fetchGmail, fetchCalendar } from '../integrations/google'
+import { translateToGlosses } from '../integrations/signLanguage'
 import {
   getSourceState,
   markProcessed,
@@ -14,7 +15,8 @@ import type {
   GoogleSource,
   FetchNewResult,
   GmailItem,
-  CalendarItem
+  CalendarItem,
+  TranslationResult
 } from '../../shared/types'
 
 // All integrations IPC lives here (3e Sticky Notes + 3d Gmail/Calendar) so
@@ -76,4 +78,8 @@ export function registerIntegrationsHandlers(): void {
       markProcessed(source, ids)
     }
   )
+
+  ipcMain.handle('integrations:signLanguage:translate', async (_e, payload: { text: string; spokenLanguage?: string; signedLanguage?: string }): Promise<TranslationResult> => {
+    return translateToGlosses(payload.text, payload.spokenLanguage, payload.signedLanguage)
+  })
 }

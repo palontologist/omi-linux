@@ -42,8 +42,8 @@ export type UseRecorder = {
   systemInterim: string
   /** Which backend is driving the mic (and system) session, for debug/UI hints.
    * Always 'omi' once connected (the only transcription backend). */
-  micBackend: 'omi' | null
-  systemBackend: 'omi' | null
+  micBackend: 'omi' | 'deepgram' | null
+  systemBackend: 'omi' | 'deepgram' | null
   screenStream: MediaStream | null
   videoRef: React.RefObject<HTMLVideoElement | null>
   /** Begin a recording session. Pass `system: true` to also transcribe loopback. */
@@ -61,8 +61,8 @@ export function useRecorder(): UseRecorder {
   const [systemLines, setSystemLines] = useState<TranscriptLine[]>([])
   const [systemInterim, setSystemInterim] = useState('')
   const [hasSystem, setHasSystem] = useState(false)
-  const [micBackend, setMicBackend] = useState<'omi' | null>(null)
-  const [systemBackend, setSystemBackend] = useState<'omi' | null>(null)
+  const [micBackend, setMicBackend] = useState<'omi' | 'deepgram' | null>(null)
+  const [systemBackend, setSystemBackend] = useState<'omi' | 'deepgram' | null>(null)
   const [saving, setSaving] = useState(false)
   const micRef = useRef<TranscriptionHandle | null>(null)
   const systemRef = useRef<TranscriptionHandle | null>(null)

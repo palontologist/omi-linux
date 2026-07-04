@@ -21,6 +21,7 @@ import type {
   DeepgramTtsResult,
   DeepgramVoice,
   AgentConfig,
+  TranslationResult,
   AgentMessage,
   AgentAudioMessage
 } from '../shared/types'
@@ -82,6 +83,8 @@ const omi: OmiBridgeApi = {
   googleCalendarFetchNew: () => ipcRenderer.invoke('integrations:google:calendarFetchNew'),
   googleMarkProcessed: (source: GoogleSource, ids: string[]) =>
     ipcRenderer.invoke('integrations:google:markProcessed', source, ids),
+  signLanguageTranslate: (text: string) =>
+    ipcRenderer.invoke('integrations:signLanguage:translate', text),
   memoriesBulkDelete: (args: { baseURL: string; token: string; ids: string[] }) =>
     ipcRenderer.invoke('memories:bulkDelete', args),
   onMemoriesDeleteProgress: (
@@ -189,6 +192,14 @@ const omi: OmiBridgeApi = {
     const listener = (_e: Electron.IpcRendererEvent, msg: AgentAudioMessage): void => cb(msg)
     ipcRenderer.on('deepgram-agent:audio', listener)
     return () => ipcRenderer.removeListener('deepgram-agent:audio', listener)
+  },
+  onDeepgramSignUpdate: (cb: (result: TranslationResult) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, result: TranslationResult): void => {
+      console.log('[Preload] Received omi-sign-update:', result);
+      cb(result)
+    }
+    ipcRenderer.on('omi-sign-update', listener)
+    return () => ipcRenderer.removeListener('omi-sign-update', listener)
   },
   deepgramAgentOllamaCheck: (): Promise<{ ok: boolean; models?: string[]; error?: string }> =>
     ipcRenderer.invoke('deepgram-agent:ollamaCheck')

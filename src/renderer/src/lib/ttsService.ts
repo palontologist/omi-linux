@@ -12,7 +12,6 @@ export type TTSSettings = {
   voiceName: string | null // null = system default
 }
 
-let currentUtterance: SpeechSynthesisUtterance | null = null
 let isSpeaking = false
 let onSpeakingChange: ((speaking: boolean) => void) | null = null
 
@@ -91,7 +90,6 @@ export function speak(
 
   utterance.onend = () => {
     isSpeaking = false
-    currentUtterance = null
     onSpeakingChange?.(false)
     callbacks?.onEnd?.()
   }
@@ -103,12 +101,10 @@ export function speak(
       callbacks?.onError?.(event.error)
     }
     isSpeaking = false
-    currentUtterance = null
     onSpeakingChange?.(false)
     callbacks?.onEnd?.()
   }
 
-  currentUtterance = utterance
   synth.speak(utterance)
 }
 
@@ -118,7 +114,6 @@ export function stop(): void {
     synth.cancel()
   }
   isSpeaking = false
-  currentUtterance = null
   onSpeakingChange?.(false)
 }
 

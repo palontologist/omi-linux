@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react'
-import { MessagesSquare, Mic, Volume2, Bot, FileText, User, Bluetooth, BluetoothConnected } from 'lucide-react'
+import { MessagesSquare, Mic, Volume2, Bot, FileText, Bluetooth, BluetoothConnected } from 'lucide-react'
 import { getPreferences, setPreferences } from '../../../lib/preferences'
 import { SettingRow } from '../SettingRow'
 import { speak, stop as stopTTS } from '../../../lib/ttsService'
-import { startAgent, stopAgent, isAgentRunning } from '../../../lib/deepgramAgentClient'
+import { startAgent, stopAgent } from '../../../lib/deepgramAgentClient'
 import { extractSummary, type SummaryResult } from '../../../lib/summaryClient'
 import { liveConversation } from '../../../lib/liveConversation'
 import { omiApi } from '../../../lib/apiClient'
 import { omiBleClient, type OmiDeviceState, type OmiDeviceInfo } from '../../../lib/omiBleClient'
-import type { AgentConfig } from '../../../../shared/types'
+import type { AgentConfig } from '../../../../../shared/types'
 import {
   getMonologurSettings,
   saveMonologurSettings,
@@ -32,7 +32,7 @@ export function GeneralTab(): React.JSX.Element {
   const [chatHistoryMode, setChatHistoryMode] = useState(getPreferences().chatHistoryMode)
   const [monologurEnabled, setMonologurEnabled] = useState(() => getMonologurSettings().enabled)
   const [ttsProvider, setTtsProvider] = useState<'web' | 'deepgram'>(() => getMonologurSettings().ttsProvider)
-  const [agentActive, setAgentActive] = useState(isAgentRunning())
+  const [agentActive, setAgentActive] = useState(false)
   const [summaryResult, setSummaryResult] = useState<SummaryResult | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
 
@@ -42,7 +42,7 @@ export function GeneralTab(): React.JSX.Element {
   const [clarificationEnabled, setClarificationEnabled] = useState(() => loadAgentSettings().clarificationEnabled !== false)
   const [llmProvider, setLlmProvider] = useState<'deepgram' | 'openai' | 'ollama'>(() => loadAgentSettings().llmProvider || 'deepgram')
   const [llmModel, setLlmModel] = useState(() => loadAgentSettings().llmModel || '')
-  const [llmBaseUrl, setLlmBaseUrl] = useState(() => loadAgentSettings().llmBaseUrl || 'http://localhost:11434/v1')
+  const [llmBaseUrl] = useState(() => loadAgentSettings().llmBaseUrl || 'http://localhost:11434/v1')
   const [ollamaStatus, setOllamaStatus] = useState<{ checked: boolean; ok: boolean; models: string[] }>({ checked: false, ok: false, models: [] })
   const [deviceState, setDeviceState] = useState<OmiDeviceState>('disconnected')
   const [deviceInfo, setDeviceInfo] = useState<OmiDeviceInfo | null>(null)
@@ -234,6 +234,18 @@ export function GeneralTab(): React.JSX.Element {
                 <option value="always" className="bg-neutral-900">Always respond</option>
               </select>
               <select
+                value={activationMode}
+                onChange={(e) => {
+                  const v = e.target.value as 'wake-word' | 'always'
+                  setActivationMode(v)
+                  saveAgentSettings({ agentName, personality, activationMode: v, clarificationEnabled, llmProvider, llmModel, llmBaseUrl })
+                }}
+                className="rounded-md bg-white/10 px-2 py-1 text-white focus:outline-none"
+              >
+                <option value="wake-word" className="bg-neutral-900">Say "{agentName}" to activate</option>
+                <option value="always" className="bg-neutral-900">Always respond</option>
+              </select>
+              <select
                 value={loadAgentSettings().language || 'en'}
                 onChange={(e) => {
                   const v = e.target.value
@@ -248,6 +260,18 @@ export function GeneralTab(): React.JSX.Element {
                 <option value="zh" className="bg-neutral-900">中文</option>
                 <option value="ja" className="bg-neutral-900">日本語</option>
               </select>
+              <div className="flex items-center gap-2 ml-2">
+                <input 
+                  type="checkbox" 
+                  id="sign-language"
+                  onChange={(e) => {
+                    localStorage.setItem('sign-language-enabled', String(e.target.checked));
+                  }}
+                  checked={localStorage.getItem('sign-language-enabled') === 'true'}
+                  className="rounded"
+                />
+                <label htmlFor="sign-language" className="text-xs text-white/60 whitespace-nowrap">Sign Language</label>
+              </div>
               <label className="flex items-center gap-1 text-white/60">
                 <input
                   type="checkbox"

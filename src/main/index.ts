@@ -1,5 +1,6 @@
-import { app, shell, BrowserWindow, ipcMain, session, nativeImage, desktopCapturer } from 'electron'
-import { join } from 'path'
+import { app, shell, BrowserWindow, ipcMain, session, nativeImage, desktopCapturer, protocol, net } from 'electron'
+import fs from 'fs/promises'
+import path, { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import iconPath from '../../resources/icon.png?asset'
 import { listCaptureSources } from './ipc/capture'
@@ -236,13 +237,23 @@ app.whenReady().then(async () => {
   // outgoing requests and inject permissive CORS response headers. Scoped to
   // the specific upstreams — everything else flows normally.
   const apiUrls = ['https://api.omi.me/*', 'https://desktop-backend-hhibjajaja-uc.a.run.app/*']
-  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: apiUrls }, (details, cb) => {
+  session.defaultSession.webRequest.onBeforeSendHeaders({ 
+    urls: [
+      ...apiUrls, 
+      'https://us-central1-sign-mt.cloudfunctions.net/*'
+    ] 
+  }, (details, cb) => {
     const headers = { ...details.requestHeaders }
     delete headers.Origin
     delete headers.origin
     cb({ requestHeaders: headers })
   })
-  session.defaultSession.webRequest.onHeadersReceived({ urls: apiUrls }, (details, cb) => {
+  session.defaultSession.webRequest.onHeadersReceived({ 
+    urls: [
+      ...apiUrls, 
+      'https://us-central1-sign-mt.cloudfunctions.net/*'
+    ] 
+  }, (details, cb) => {
     cb({
       responseHeaders: {
         ...details.responseHeaders,
@@ -291,6 +302,28 @@ app.whenReady().then(async () => {
 
   // Synchronous permission check handler (called before permission request)
   session.defaultSession.setPermissionCheckHandler(() => true)
+  
+  // Register custom protocol to serve pose/video assets from temp dir
+  protocol.handle('omi-asset', async (request) => {
+    const url = request.url.replace('omi-asset://', '');
+    const assetPath = join(app.getPath('temp'), 'omi-sign-poses', url);
+    
+    try {
+      const content = await fs.readFile(assetPath);
+      const extension = path.extname(url);
+      const contentType = extension === '.mp4' ? 'video/mp4' : 'application/octet-stream';
+      
+      return new Response(content, {
+        headers: {
+          'Content-Type': contentType,
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
+    } catch (e) {
+      console.error(`[omi-asset] Failed to serve asset ${assetPath}:`, e);
+      return new Response('Asset not found', { status: 404 });
+    }
+  })
 
   ipcMain.handle('capture:getSources', async () => listCaptureSources())
   // Renderer reports its first painted frame; recorded here so the startup mark

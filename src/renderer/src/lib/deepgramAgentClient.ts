@@ -167,7 +167,7 @@ function startBleCapture(sessionId: string): void {
     onAudioData: (data, codec) => {
       if (currentSessionId !== sessionId) return
       const int16 = convertBleAudio(data, codec)
-      window.omi.deepgramAgentFeed(sessionId, int16.buffer)
+      window.omi.deepgramAgentFeed(sessionId, int16.buffer as ArrayBuffer)
     },
     onError: (err) => {
       console.error('[agent] BLE error:', err)
@@ -193,7 +193,7 @@ async function startMicCapture(sessionId: string): Promise<void> {
         const s = Math.max(-1, Math.min(1, f32[i]))
         i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
       }
-      window.omi.deepgramAgentFeed(sessionId, i16.buffer)
+      window.omi.deepgramAgentFeed(sessionId, i16.buffer as ArrayBuffer)
     }
   } catch (e) {
     console.error('[agent] mic capture failed:', e)

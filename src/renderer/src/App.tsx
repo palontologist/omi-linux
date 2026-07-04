@@ -24,6 +24,7 @@ import { invalidateConversationsCache } from './lib/pageCache'
 import { runAnimBench } from './lib/animBench'
 import { InsightToast } from './components/insight/InsightToast'
 import { MonologurHost } from './components/monologur/MonologurHost'
+import { SignLanguagePage } from './pages/SignLanguage'
 
 function AppShellInner(): React.JSX.Element {
   const { recorder, pickerOpen, setPickerOpen } = useAppState()
@@ -67,9 +68,7 @@ function AppShellInner(): React.JSX.Element {
       <main className="page-outlet relative z-10 min-h-0 flex-1 overflow-hidden">
         <MainViews />
       </main>
-      {/* Hidden video sink for screen-capture recording mode. Invisible, but
-          mounted app-wide so the screen stream has a render target regardless of
-          which tab is active. */}
+      {/* Hidden video sink for screen-capture recording and other needs. */}
       <video
         ref={recorder.videoRef}
         muted
@@ -80,15 +79,14 @@ function AppShellInner(): React.JSX.Element {
         onClose={() => setPickerOpen(false)}
         onPick={recorder.pickScreen}
       />
-      {/* Background screen capture for Rewind (runs while the app is open). */}
       <RewindCaptureHost />
-      {/* Always-on mic capture for continuous recording mode. */}
       <ContinuousRecordingHost />
-      {/* Monologur: always-listening AI assistant with TTS. */}
       <MonologurHost />
     </div>
   )
 }
+
+
 
 function AppShell(): React.JSX.Element {
   // One-time cleanup of legacy "Uses <App>" memories (macOS parity — app data
@@ -144,6 +142,7 @@ function App(): React.JSX.Element {
       <SandboxBadge />
       <Routes>
         <Route path="/insight-toast" element={<InsightToast />} />
+        <Route path="/sign-language" element={<AppStateProvider><SignLanguagePage /></AppStateProvider>} />
         <Route path="/overlay" element={<OverlayApp />} />
         <Route path="/login" element={user ? <Navigate to="/home" replace /> : <Login />} />
         <Route

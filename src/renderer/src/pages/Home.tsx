@@ -13,7 +13,6 @@ import omiMark from '../assets/omi-logo.png'
 import { maybeStartScreenSynthesis } from '../lib/screenSynthesis'
 import { maybeStartInsightEngine } from '../lib/insightEngine'
 import { maybeStartRetentionSweep } from '../lib/retentionSweep'
-import { isAgentRunning } from '../lib/deepgramAgentClient'
 import { omiBleClient, type OmiDeviceState } from '../lib/omiBleClient'
 
 function firstName(u: User | null): string {

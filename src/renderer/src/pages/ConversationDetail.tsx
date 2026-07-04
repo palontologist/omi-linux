@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCw, Loader2, Trash2, Sparkles, Copy, Check, ListChecks } from 'lucide-react'
+import { RefreshCw, Loader2, Trash2, Sparkles, Copy, Check } from 'lucide-react'
 import { omiApi } from '../lib/apiClient'
 import { invalidateConversationsCache } from '../lib/pageCache'
 import { conversationSummaries } from '../lib/conversationSummaries'

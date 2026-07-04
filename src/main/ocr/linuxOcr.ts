@@ -39,7 +39,7 @@ export async function linuxOcr(jpeg: Buffer): Promise<OcrResult> {
   try {
     // Write JPEG to a temp file, run tesseract, read result
     const tmpFile = `/tmp/omi-ocr-${Date.now()}.jpg`
-    const { writeFile, readFile, unlink } = await import('fs/promises')
+    const { writeFile, unlink } = await import('fs/promises')
     await writeFile(tmpFile, jpeg)
 
     try {
@@ -51,8 +51,8 @@ export async function linuxOcr(jpeg: Buffer): Promise<OcrResult> {
       const text = stdout.trim()
       return {
         ok: true,
-        text: text || '',
-        confidence: 0.8 // Tesseract doesn't always return confidence
+        fullText: text || '',
+        lines: []
       }
     } finally {
       await unlink(tmpFile).catch(() => {})
