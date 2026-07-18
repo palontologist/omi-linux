@@ -8,6 +8,7 @@ export type SignGloss = {
 export type TranslationResult = {
   originalText: string
   poseUrl?: string
+  assetType?: 'video' | 'pose'
   glosses: SignGloss[]
   swrFull?: string
 }

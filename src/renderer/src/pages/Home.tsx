@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Send, Mic, Square, MessageSquarePlus, Bluetooth, BluetoothConnected } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
 import type { User } from 'firebase/auth'
 import { auth, onAuthStateChanged } from '../lib/firebase'
 import { useAppState } from '../state/AppStateProvider'
@@ -14,6 +13,8 @@ import { maybeStartScreenSynthesis } from '../lib/screenSynthesis'
 import { maybeStartInsightEngine } from '../lib/insightEngine'
 import { maybeStartRetentionSweep } from '../lib/retentionSweep'
 import { omiBleClient, type OmiDeviceState } from '../lib/omiBleClient'
+import { SignAvatar } from '../components/signLanguage/SignAvatar'
+import { TranslationResult } from '../../../shared/types'
 
 function firstName(u: User | null): string {
   const display = u?.displayName?.trim().split(/\s+/)[0]
@@ -95,14 +96,23 @@ function ChatBar(props: {
 }
 
 export function Home(): React.JSX.Element {
-  const { chat } = useAppState()
-  const navigate = useNavigate()
+  const { chat, startRecording } = useAppState()
   const [user, setUser] = useState<User | null>(auth.currentUser)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const widgetsGridRef = useRef<HTMLDivElement>(null)
   const lastLenRef = useRef(0)
   const [recording, setRecording] = useState(false)
   const [deviceState, setDeviceState] = useState<OmiDeviceState>('disconnected')
+  const [poseUrl, setPoseUrl] = useState<string | null>(null)
+  const [translationUnavailable, setTranslationUnavailable] = useState(false)
+
+  useEffect(() => {
+    const unsubscribe = window.omi.onDeepgramSignUpdate((result: TranslationResult) => {
+      setPoseUrl(result.poseUrl || null)
+      setTranslationUnavailable(result.swrFull === 'TRANSLATION_UNAVAILABLE')
+    })
+    return unsubscribe
+  }, [])
 
   useEffect(() => {
     const unsub = omiBleClient.on({
@@ -159,6 +169,16 @@ export function Home(): React.JSX.Element {
     if (!text.trim() || chat.sending) return
     setInput('')
     void chat.send(text)
+  }
+
+  const handleRecord = async (): Promise<void> => {
+    if (recording) {
+      setRecording(false)
+    } else {
+      setRecording(true)
+      // Always start mic-only recording for live sign-language translation.
+      void startRecording('mic')
+    }
   }
 
   useEffect(() => onAuthStateChanged(auth, (u) => setUser(u)), [])
@@ -284,23 +304,24 @@ export function Home(): React.JSX.Element {
       {/* The row's height is set instantly (no layout animation) once both
           widgets are ready; the reveal itself is a compositor-only transform +
           opacity fade, so it can't reflow/jank the way animating height did. */}
-      <div className="overflow-hidden" style={{ height: widgetsReady ? widgetsH + 48 : 0 }}>
-        <div
-          className={cn(
-            'transition-[transform,opacity] duration-[600ms] ease-[cubic-bezier(0.4,0,0.2,1)] will-change-transform',
-            widgetsReady ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'
-          )}
-        >
-          <div
-            ref={widgetsGridRef}
-            className="mx-auto grid w-full max-w-4xl items-stretch gap-4 sm:grid-cols-2"
-          >
-            <QuickTaskWidget onReady={() => setTasksReady(true)} />
-            <QuickGoalsWidget onReady={() => setGoalsReady(true)} />
-          </div>
-          <div className="h-12" />
-        </div>
-      </div>
+       <div className="overflow-hidden" style={{ height: widgetsReady ? widgetsH + 48 : 0 }}>
+         <div
+           className={cn(
+             'transition-[transform,opacity] duration-[600ms] ease-[cubic-bezier(0.4,0,0.2,1)] will-change-transform',
+             widgetsReady ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'
+           )}
+         >
+            <div
+              ref={widgetsGridRef}
+              className="mx-auto grid w-full max-w-4xl items-stretch gap-4 sm:grid-cols-2"
+            >
+             <QuickTaskWidget onReady={() => setTasksReady(true)} />
+             <QuickGoalsWidget onReady={() => setGoalsReady(true)} />
+           </div>
+           <div className="h-12" />
+         </div>
+       </div>
+
 
       {/* Middle: the thread (active) or the greeting (idle). */}
       <div
@@ -309,8 +330,25 @@ export function Home(): React.JSX.Element {
         className="min-h-0 overflow-y-auto"
         style={{ WebkitMaskImage: mask, maskImage: mask }}
       >
-        <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col">
-          <div className="mt-auto space-y-2 pb-2">
+        <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col relative">
+            {/* Always-on sign-language avatar — prominent panel, bottom-right of the
+                thread. Visible whenever a live translation is streaming; shows a
+                clear status otherwise. */}
+            <div className="absolute bottom-16 right-0 z-50 w-72 h-56 rounded-2xl border border-white/10 bg-black/40 shadow-2xl overflow-hidden pointer-events-none">
+              {translationUnavailable ? (
+                <div className="flex items-center justify-center h-full text-amber-500 text-[11px] italic text-center px-3">
+                  Sign service unavailable
+                </div>
+              ) : poseUrl ? (
+                <SignAvatar poseUrl={poseUrl} />
+              ) : (
+                <div className="flex items-center justify-center h-full text-gray-500 text-[11px] italic text-center px-3">
+                  Start recording to see sign translation
+                </div>
+              )}
+            </div>
+           <div className="mt-auto space-y-2 pb-2">
+
             {started && showThread ? (
               windowed.map((m, i) => {
                 const isUser = m.role === 'user'
@@ -417,15 +455,7 @@ export function Home(): React.JSX.Element {
             sending={chat.sending}
             recording={recording}
             onNewChat={() => chat.reset()}
-            onRecord={() => {
-              if (recording) {
-                setRecording(false)
-                navigate('/conversations')
-              } else {
-                setRecording(true)
-                navigate('/conversations/live')
-              }
-            }}
+            onRecord={handleRecord}
           />
         </div>
       </div>

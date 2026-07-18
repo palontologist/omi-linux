@@ -1,4 +1,16 @@
-import { app, shell, BrowserWindow, ipcMain, session, nativeImage, desktopCapturer, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, session, nativeImage, desktopCapturer, protocol } from 'electron'
+
+// MUST be called before any other app logic to ensure GPU process is configured correctly
+// pose-viewer (Sign Avatar) requires a working WebGL context, so we must NOT disable
+// the GPU compositing path. On Wayland we keep the ozone hint; the EGL_BAD_MATCH
+// screen-capture warnings are harmless and unrelated to the avatar.
+app.commandLine.appendSwitch('ozone-platform-hint', 'wayland');
+app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
+// Force SwiftShader software WebGL as a fallback so the avatar renders even when
+// the native Wayland GL path is broken (EGL_BAD_MATCH). This keeps WebGL alive
+// without disabling compositing outright.
+app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+
 import fs from 'fs/promises'
 import path, { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -98,9 +110,9 @@ if (sandbox && process.env.OMI_BENCH !== '1') {
 }
 
 // Enable PipeWire support for Wayland screen/audio capture
-app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer')
+app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
 // Prefer PipeWire for screen capture on Wayland
-app.commandLine.appendSwitch('ozone-platform-hint', 'auto')
+app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 
 const icon = nativeImage.createFromPath(iconPath)
 import {
@@ -122,7 +134,7 @@ function createWindow(): BrowserWindow {
     height: 820,
     minWidth: 1024,
     minHeight: 640,
-    show: false,
+    show: true,
     autoHideMenuBar: true,
     frame: true,
     transparent: false,
@@ -145,9 +157,7 @@ function createWindow(): BrowserWindow {
   // the Rewind timeline like any other app. The frame dedup hash still skips
   // unchanged frames, and the foreground-window metadata records when Omi is
   // frontmost. (The floating overlay keeps its own protection in overlay/window.ts.)
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
+  mainWindow.show();
   perfMark('window:created')
 
   // Allow Firebase + Google OAuth popups to open as real Electron windows so
@@ -311,7 +321,7 @@ app.whenReady().then(async () => {
     try {
       const content = await fs.readFile(assetPath);
       const extension = path.extname(url);
-      const contentType = extension === '.mp4' ? 'video/mp4' : 'application/octet-stream';
+      const contentType = extension === '.mp4' ? 'video/mp4' : (extension === '.pose' ? 'application/json' : 'application/octet-stream');
       
       return new Response(content, {
         headers: {

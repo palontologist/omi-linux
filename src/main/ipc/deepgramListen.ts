@@ -3,7 +3,7 @@
 import { ipcMain, WebContents, webContents } from 'electron'
 import WebSocket from 'ws'
 import https from 'https'
-import { translateToGlosses } from '../integrations/signLanguage'
+import { translateToGlosses, defaultSignOpts } from '../integrations/signLanguage'
 import type { BackendSegment, ListenEvent, ListenMessage, ListenStartArgs } from '../../shared/types'
 
 const DEEPGRAM_WS_URL = 'wss://api.deepgram.com/v1/listen'
@@ -15,6 +15,8 @@ type DeepgramSession = {
   closed: boolean
   startTime: number
   buffer: ArrayBuffer[]
+  transcriptBuffer: string
+  lastTranslationTime: number
   keepalive?: ReturnType<typeof setInterval>
 }
 
@@ -108,7 +110,9 @@ function startDeepgramSession(args: ListenStartArgs, owner: WebContents, apiKey:
     source: args.source,
     closed: false,
     startTime: Date.now(),
-    buffer: []
+    buffer: [],
+    transcriptBuffer: '',
+    lastTranslationTime: 0
   }
   sessions.set(args.sessionId, session)
 
@@ -152,38 +156,69 @@ function startDeepgramSession(args: ListenStartArgs, owner: WebContents, apiKey:
           // Extract sentiment if present
           const sentiment = obj.sentiment as { sentiment: string; confidence: number } | undefined
 
-           const segment: BackendSegment = {
-             id: `dg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-             text: alt.transcript,
-             is_user: true, // Default to user; could use speech_final + speaker detection
-             start: Math.round(start * 1000),
-             end: Math.round((start + duration) * 1000),
-             ...(sentiment ? { sentiment: sentiment.sentiment, sentimentScore: sentiment.confidence } : {})
-           }
- 
-           emit(session.ownerId, {
-             sessionId: args.sessionId,
-             kind: 'segments',
-             segments: [segment]
-           })
+          const segment: BackendSegment = {
+            id: `dg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            text: alt.transcript,
+            is_user: true, // Default to user; could use speech_final + speaker detection
+            start: Math.round(start * 1000),
+            end: Math.round((start + duration) * 1000),
+            ...(sentiment ? { sentiment: sentiment.sentiment, sentimentScore: sentiment.confidence } : {})
+          }
 
-            // Trigger Sign Language Translation for BOTH final and interim results
-            // to make the avatar feel more responsive.
-             console.log(`[deepgram] Triggering translation for: "${alt.transcript}"`);
-             translateToGlosses(alt.transcript).then(result => {
-               console.log(`[sign-language] translation success for: "${alt.transcript}"`, result);
-               // Broadcast to all windows so the Overlay window can see it even if the Main window started the session
-               webContents.getAllWebContents().forEach(wc => {
-                 if (!wc.isDestroyed()) {
-                   wc.send('omi-sign-update', result)
-                 }
-               });
-             }).catch(err => console.error('[sign-language] translation error:', err))
+          emit(session.ownerId, {
+            sessionId: args.sessionId,
+            kind: 'segments',
+            segments: [segment]
+          })
 
+          // --- Live Sign Language Translation ---
+          const isFinal = (obj as any).is_final === true;
+          const transcript = alt.transcript.trim();
+          
+          if (isFinal) {
+            session.transcriptBuffer += (session.transcriptBuffer ? ' ' : '') + transcript;
+          }
+
+          // Translate if it's a final segment, or if we've accumulated enough text 
+          // and it's been a while since the last translation.
+          const now = Date.now();
+          const shouldTranslate = isFinal || (session.transcriptBuffer.length > 10 && now - session.lastTranslationTime > 2000);
+
+          if (shouldTranslate) {
+            const fullText = isFinal 
+              ? session.transcriptBuffer 
+              : (session.transcriptBuffer + (isFinal ? '' : ' ' + transcript)).trim();
+            
+            const textToTranslate = fullText.slice(-256); // Send only the most recent 256 chars
+            
+            if (textToTranslate) {
+              translateToGlosses(textToTranslate, 'en', 'ase', defaultSignOpts()).then(result => {
+                const wc = webContents.fromId(session.ownerId);
+                if (wc && !wc.isDestroyed()) {
+                  wc.send('omi-sign-update', result);
+                }
+              }).catch(e => console.error('[deepgram] live translation failed:', e));
+              
+              session.lastTranslationTime = now;
+              if (isFinal) {
+                // We don't clear the buffer immediately to maintain context for the next segment,
+                // but we might want to truncate it if it gets too long.
+                if (session.transcriptBuffer.length > 1000) {
+                  session.transcriptBuffer = session.transcriptBuffer.slice(-500);
+                }
+              }
+            }
+          }
+          if (!isFinal) {
+            // For interim results, we can still update the buffer if we want, 
+            // but we typically rely on is_final for stable translation.
+          }
+          return
         }
       }
       return
     }
+
 
     // Handle utterance end
     if (type === 'UtteranceEnd') {

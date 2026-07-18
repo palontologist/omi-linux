@@ -15,6 +15,7 @@
 import { createServer, type Server } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { extname, join, normalize, sep } from 'node:path'
+import { app } from 'electron'
 
 const PREFERRED_PORT = 5179
 const PORT_ATTEMPTS = 10
@@ -31,10 +32,16 @@ const MIME: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
-  '.txt': 'text/plain; charset=utf-8'
+  '.txt': 'text/plain; charset=utf-8',
+  '.pose': 'application/json',
+  '.mp4': 'video/mp4'
 }
 
 let baseUrl: string | null = null
+
+/** Writable dir (real FS, NOT inside app.asar) where generated pose/video files
+ * are written so pose-viewer can fetch() them over localhost. */
+export const POSES_DIR = join(app.getPath('temp'), 'omi-sign-poses', 'http')
 
 /** http://localhost:<port> once startRendererServer has resolved, else null (dev mode). */
 export function rendererBaseUrl(): string | null {
@@ -69,6 +76,31 @@ export async function startRendererServer(rendererRoot: string): Promise<string>
   const server = createServer((req, res) => {
     void (async () => {
       const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname)
+
+      // Serve generated pose/video files from a writable real-FS dir (these
+      // can't live inside app.asar). pose-viewer fetch()es them over localhost.
+      if (pathname.startsWith('/__poses/')) {
+        const name = normalize(pathname.slice('/__poses/'.length))
+        // Containment: only allow a bare filename (no path traversal).
+        if (name.includes(sep) || name.startsWith('..')) {
+          res.writeHead(403).end()
+          return
+        }
+        const file = join(POSES_DIR, name)
+        try {
+          const body = await readFile(file)
+          res.writeHead(200, {
+            'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
+            'cache-control': 'no-cache',
+            'access-control-allow-origin': '*'
+          })
+          res.end(body)
+        } catch {
+          res.writeHead(404).end()
+        }
+        return
+      }
+
       const rel = pathname === '/' ? 'index.html' : pathname.slice(1)
       const file = normalize(join(root, rel))
       // Containment check — never serve anything outside the renderer dir.

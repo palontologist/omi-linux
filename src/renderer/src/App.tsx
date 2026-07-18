@@ -24,7 +24,6 @@ import { invalidateConversationsCache } from './lib/pageCache'
 import { runAnimBench } from './lib/animBench'
 import { InsightToast } from './components/insight/InsightToast'
 import { MonologurHost } from './components/monologur/MonologurHost'
-import { SignLanguagePage } from './pages/SignLanguage'
 
 function AppShellInner(): React.JSX.Element {
   const { recorder, pickerOpen, setPickerOpen } = useAppState()
@@ -141,9 +140,8 @@ function App(): React.JSX.Element {
     <HashRouter>
       <SandboxBadge />
       <Routes>
-        <Route path="/insight-toast" element={<InsightToast />} />
-        <Route path="/sign-language" element={<AppStateProvider><SignLanguagePage /></AppStateProvider>} />
-        <Route path="/overlay" element={<OverlayApp />} />
+         <Route path="/insight-toast" element={<InsightToast />} />
+         <Route path="/overlay" element={<OverlayApp />} />
         <Route path="/login" element={user ? <Navigate to="/home" replace /> : <Login />} />
         <Route
           path="/onboarding"

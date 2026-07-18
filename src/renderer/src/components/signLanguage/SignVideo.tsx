@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react'
-import { resolveOmiAsset } from '../../utils/assetResolver'
+import { useEffect, useState, useRef } from 'react'
 
 type SignVideoProps = {
   videoUrl: string | null
@@ -7,18 +6,27 @@ type SignVideoProps = {
 
 export function SignVideo({ videoUrl }: SignVideoProps) {
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
-    async function resolve() {
-      if (videoUrl) {
-        const resolved = await resolveOmiAsset(videoUrl);
-        setResolvedUrl(resolved);
-      } else {
-        setResolvedUrl(null);
-      }
+    console.log('[SignVideo] Received videoUrl:', videoUrl);
+    if (videoUrl) {
+      // Directly use the URL to avoid potential blob issues, 
+      // since CSP now allows data:
+      setResolvedUrl(videoUrl);
+    } else {
+      setResolvedUrl(null);
     }
-    resolve();
   }, [videoUrl]);
+
+  useEffect(() => {
+    if (videoRef.current && resolvedUrl) {
+      console.log('[SignVideo] Attempting to play video with src:', resolvedUrl);
+      videoRef.current.play().catch(e => {
+        console.error('[SignVideo] Playback failed:', e);
+      });
+    }
+  }, [resolvedUrl]);
 
   if (!videoUrl || !resolvedUrl) {
     return (
@@ -31,6 +39,7 @@ export function SignVideo({ videoUrl }: SignVideoProps) {
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-transparent">
       <video 
+        ref={videoRef}
         key={resolvedUrl}
         src={resolvedUrl} 
         autoPlay 
@@ -40,6 +49,7 @@ export function SignVideo({ videoUrl }: SignVideoProps) {
         className="w-full h-full object-contain"
         style={{ maxHeight: '100%', maxWidth: '100%' }}
         onError={(e) => console.error('[SignVideo] Video load error:', e)}
+        onCanPlay={() => console.log('[SignVideo] Video can play now')}
       />
     </div>
   )

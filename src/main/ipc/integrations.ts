@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import { readStickyNotes } from '../integrations/stickyNotes'
 import { connect, disconnect, isConnected, connectedEmail } from '../integrations/oauth'
 import { fetchGmail, fetchCalendar } from '../integrations/google'
-import { translateToGlosses } from '../integrations/signLanguage'
+import { translateToGlosses, defaultSignOpts } from '../integrations/signLanguage'
 import {
   getSourceState,
   markProcessed,
@@ -79,7 +79,13 @@ export function registerIntegrationsHandlers(): void {
     }
   )
 
-  ipcMain.handle('integrations:signLanguage:translate', async (_e, payload: { text: string; spokenLanguage?: string; signedLanguage?: string }): Promise<TranslationResult> => {
-    return translateToGlosses(payload.text, payload.spokenLanguage, payload.signedLanguage)
+  ipcMain.handle('integrations:signLanguage:translate', async (_e, payload: any): Promise<TranslationResult> => {
+    const text = typeof payload === 'string' ? payload : payload?.text;
+    const spokenLanguage = typeof payload === 'object' ? payload?.spokenLanguage : 'en';
+    const signedLanguage = typeof payload === 'object' ? payload?.signedLanguage : 'ase';
+    
+    if (!text) throw new Error('No text provided for translation');
+    
+    return translateToGlosses(text, spokenLanguage, signedLanguage, defaultSignOpts())
   })
 }
