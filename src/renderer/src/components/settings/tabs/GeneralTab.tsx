@@ -15,6 +15,7 @@ import {
   startMonologur,
   stopMonologur
 } from '../../../lib/monologurEngine'
+import { clearVoiceprint, isEnrolled } from '../../../lib/voiceprint'
 
 function loadAgentSettings(): AgentConfig {
   try {
@@ -32,6 +33,7 @@ export function GeneralTab(): React.JSX.Element {
   const [chatHistoryMode, setChatHistoryMode] = useState(getPreferences().chatHistoryMode)
   const [monologurEnabled, setMonologurEnabled] = useState(() => getMonologurSettings().enabled)
   const [ttsProvider, setTtsProvider] = useState<'web' | 'deepgram'>(() => getMonologurSettings().ttsProvider)
+  const [voiceEnrolled, setVoiceEnrolled] = useState(() => isEnrolled())
   const [agentActive, setAgentActive] = useState(false)
   const [summaryResult, setSummaryResult] = useState<SummaryResult | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
@@ -127,6 +129,28 @@ export function GeneralTab(): React.JSX.Element {
               {monologurEnabled ? 'Enabled' : 'Disabled'}
             </button>
           </div>
+        }
+      />
+
+      <SettingRow
+        icon={Mic}
+        title="Voice Identity"
+        subtitle={
+          voiceEnrolled
+            ? 'Your voice is enrolled. Omi labels your speech as "You" and others as "Other". Say something to re-confirm, or re-enroll.'
+            : 'Not enrolled yet — the next voice Omi hears will be registered as you. Talk for a few seconds after saving, or re-enroll below.'
+        }
+        keywords="voiceprint speaker identity diarization me you"
+        control={
+          <button
+            onClick={() => {
+              clearVoiceprint()
+              setVoiceEnrolled(false)
+            }}
+            className="rounded-md bg-white/10 px-3 py-1.5 text-sm font-medium text-white/70 transition-colors hover:bg-white/20"
+          >
+            {voiceEnrolled ? 'Re-enroll' : 'Clear'}
+          </button>
         }
       />
 

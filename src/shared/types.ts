@@ -60,6 +60,9 @@ export type TranscriptLine = {
   speaker?: string
   text: string
   interim?: boolean
+  /** True when the enrolled voiceprint identifies this line as the user ("You"),
+   *  rather than someone else in the room. Undefined when not yet resolved. */
+  isUser?: boolean
 }
 
 export type ConversationPayload = {

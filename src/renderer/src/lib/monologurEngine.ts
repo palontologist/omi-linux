@@ -2,6 +2,7 @@
 import { generate } from './geminiClient'
 import { liveConversation } from './liveConversation'
 import { speak, stop as stopTTS, setOnSpeakingChange, isTTSSpeaking } from './ttsService'
+import { getMonologurMemoryContext, saveMonologurInsight } from './monologurMemory'
 import type { TTSSettings } from './ttsService'
 import type { TranscriptLine } from '../../../shared/types'
 
@@ -19,7 +20,7 @@ export type MonologurSettings = {
 }
 
 const DEFAULT_SETTINGS: MonologurSettings = {
-  enabled: false,
+  enabled: true,
   intervalMs: 60_000,
   minWordsBeforePrompt: 20,
   cooldownMs: 300_000,
@@ -141,27 +142,44 @@ function buildConversationContext(segments: TranscriptLine[]): string {
     .join('\n')
 }
 
+// The user's own recent speech only — Monologur reacts to what YOU say, not to
+// other people in the room (identified via the enrolled voiceprint).
+function userSpeech(segments: TranscriptLine[]): string {
+  return segments
+    .filter((s) => s.isUser)
+    .slice(-10)
+    .map((s) => s.text)
+    .join('\n')
+    .trim()
+}
+
 // Generate a proactive prompt using the LLM
-async function generateProactivePrompt(context: string): Promise<string | null> {
+async function generateProactivePrompt(context: string, segments: TranscriptLine[]): Promise<string | null> {
   try {
+    // Pull the user's saved memories and rank them against what they just said,
+    // so Monologur can reference real context like the main Omi agent does.
+    const memoryContext = await getMonologurMemoryContext(userSpeech(segments))
+    const augmentedContext = memoryContext ? `${context}\n\n${memoryContext}` : context
+
     const response = await generate({
       model: 'gemini-2.5-flash',
       parts: [
         {
           text: `Based on this ongoing conversation, decide if you should proactively speak to the user.
-
-Conversation context:
-${context}
-
-Rules:
-- If the conversation just started or is too short, respond with "SKIP"
-- If the user is in the middle of something complex, respond with "SKIP"
-- If you have a genuinely useful suggestion, insight, or reminder, provide it
-- If the user mentioned something you could help with, offer help
-- Keep your response to 1-2 sentences maximum
-- Be natural and conversational
-
-If you should speak, respond with just what you would say. If you should stay quiet, respond with exactly "SKIP"`
+ 
+ Conversation context:
+ ${augmentedContext}
+ 
+ Rules:
+ - If the conversation just started or is too short, respond with "SKIP"
+ - If the user is in the middle of something complex, respond with "SKIP"
+ - If you have a genuinely useful suggestion, insight, or reminder, provide it
+ - If the user mentioned something you could help with, offer help
+ - Reference the user's saved memories when relevant to make it personal
+ - Keep your response to 1-2 sentences maximum
+ - Be natural and conversational
+ 
+ If you should speak, respond with just what you would say. If you should stay quiet, respond with exactly "SKIP"`
         }
       ],
       systemPrompt: settings.systemPrompt
@@ -196,11 +214,14 @@ async function checkAndPrompt(): Promise<void> {
 
   try {
     const context = buildConversationContext(segments)
-    const prompt = await generateProactivePrompt(context)
+    const prompt = await generateProactivePrompt(context, segments)
 
     if (prompt) {
       lastPromptTime = now
       onProactiveMessage?.(prompt)
+      // Persist genuinely useful, durable insights back to the shared memory store
+      // so Monologur's help compounds over time (tap the Omi agent memory).
+      void saveMonologurInsight(prompt)
 
       if (settings.tts.enabled) {
         // Try Deepgram TTS first, fall back to Web Speech API

@@ -31,8 +31,8 @@ export type Preferences = {
   overlayShortcut?: string
   // Always-on microphone capture. When true, the app streams the mic to
   // /v4/listen from launch and the backend creates conversations (macOS-faithful).
-  // Set by the onboarding opt-in step; toggled in Settings → Rewind. Undefined =
-  // off (opt-in), so existing users are unaffected until they enable it.
+  // Defaults on so the always-listening Monologur agent has audio to work with;
+  // can be toggled in Settings → Rewind.
   continuousRecording?: boolean
   // Auto-cleanup of empty conversations + junk memories. 'dry-run' (default) logs
   // what it WOULD delete without deleting; 'live' deletes (rate-limited); 'off'
@@ -49,7 +49,10 @@ const defaults: Preferences = {
   // Infinite by default: one ongoing conversation that persists across launches
   // and is accessible from the beginning (the Home thread windows it in as you
   // scroll up). Users can switch back to 'per-launch' in Settings.
-  chatHistoryMode: 'infinite'
+  chatHistoryMode: 'infinite',
+  // Always-on mic capture on by default: feeds Monologur (the always-listening
+  // agent) and matches the macOS app's background listening.
+  continuousRecording: true
 }
 
 function load(): Preferences {

@@ -1,5 +1,11 @@
 import { auth } from './firebase'
 import { startOmiListen, type OmiListenHandle } from './omiListenClient'
+import {
+  getVoiceprint,
+  labelForSpeaker,
+  enrollSpeaker,
+  reAnchorIfEnrolled
+} from './voiceprint'
 import type { BackendSegment, ListenSource, TranscriptLine } from '../../../shared/types'
 
 const CONNECT_TIMEOUT_MS = 3000
@@ -26,6 +32,23 @@ export type TranscriptionHandle = {
 }
 
 function segmentToLine(seg: BackendSegment): TranscriptLine {
+  // If Deepgram diarization gave us a speaker cluster, resolve it against the
+  // enrolled voiceprint so Omi knows which voice is "You".
+  if (typeof seg.speaker_id === 'number') {
+    const vp = getVoiceprint()
+    // Auto-enroll on first observed utterance if the user hasn't enrolled yet:
+    // the first speaker we hear is treated as the user.
+    if (!vp.enrolled) {
+      enrollSpeaker(seg.speaker_id)
+    } else {
+      // Re-anchor the enrolled cluster to whatever the user actually produced
+      // this session (cluster ids are per-session on nova-2).
+      reAnchorIfEnrolled(seg.speaker_id)
+    }
+    const { speaker, isUser } = labelForSpeaker(seg.speaker_id)
+    return { id: seg.id, speaker, text: seg.text, isUser }
+  }
+
   const speaker = seg.is_user
     ? 'You'
     : seg.speaker

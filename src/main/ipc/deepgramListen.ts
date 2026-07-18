@@ -77,7 +77,10 @@ function buildDeepgramUrl(language: string): string {
     interim_results: 'true',
     speech_final: 'true',
     utterance_end_ms: '1000',
-    sentiment: 'true'
+    sentiment: 'true',
+    // Speaker diarization: assigns an ephemeral cluster id to each speaker so we
+    // can tell "me" apart from other people in the room.
+    diarize: 'true'
   })
   if (language && language !== 'en') {
     params.set('language', language)
@@ -156,10 +159,36 @@ function startDeepgramSession(args: ListenStartArgs, owner: WebContents, apiKey:
           // Extract sentiment if present
           const sentiment = obj.sentiment as { sentiment: string; confidence: number } | undefined
 
+          // Diarization: pick the dominant speaker cluster for this utterance from
+          // the per-word `speaker` labels Deepgram attaches when diarize=true.
+          const words = (alt as { words?: Array<{ speaker?: number }> }).words
+          let speakerId: number | undefined
+          if (words && words.length > 0) {
+            const counts = new Map<number, number>()
+            for (const w of words) {
+              if (typeof w.speaker === 'number') {
+                counts.set(w.speaker, (counts.get(w.speaker) ?? 0) + 1)
+              }
+            }
+            let best = -1
+            let bestN = 0
+            for (const [id, n] of counts) {
+              if (n > bestN) {
+                bestN = n
+                best = id
+              }
+            }
+            if (best >= 0) speakerId = best
+          }
+
           const segment: BackendSegment = {
             id: `dg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             text: alt.transcript,
-            is_user: true, // Default to user; could use speech_final + speaker detection
+            // is_user is resolved in the renderer against the enrolled voiceprint;
+            // we pass the cluster id and a provisional label. Default to true only
+            // when no diarization info is available (single-speaker fallback).
+            is_user: speakerId == null,
+            ...(speakerId != null ? { speaker_id: speakerId, speaker: `Speaker ${speakerId}` } : {}),
             start: Math.round(start * 1000),
             end: Math.round((start + duration) * 1000),
             ...(sentiment ? { sentiment: sentiment.sentiment, sentimentScore: sentiment.confidence } : {})
