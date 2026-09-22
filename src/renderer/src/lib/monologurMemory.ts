@@ -1,12 +1,12 @@
 // Monologur memory bridge.
 //
-// Monologur is the always-listening background agent. To make its interruptions
-// feel personal it taps the same memory the Omi agent uses:
-//   - READ: pull the user's saved memories (/v3/memories) and rank them against
-//     the current conversation so the proactive prompt can reference real context.
-//   - WRITE: when Monologur produces a genuinely useful, durable insight it stores
-//     it back as a memory (tagged `monologur`) so it compounds over time — the same
-//     store the main agent and brain map read from.
+// Monologur taps the same memory the Omi agent uses for READ context so its
+// suggestions feel personal:
+//   - READ: pull a bounded slice of the user's saved memories (/v3/memories) and
+//     rank the few most relevant against the current conversation.
+//   - LOCAL WRITE ONLY: Monologur's own insights are kept in a local ring buffer
+//     (localStorage). It does NOT auto-write to the shared memory store — writing
+//     a memory/task is always an explicit, user-initiated action elsewhere.
 //
 // All calls are best-effort and never block the proactive loop.
 
@@ -14,8 +14,13 @@ import { omiApi } from './apiClient'
 import { rankMemories } from './memoryRank'
 import type { Memory } from '../hooks/useMemories'
 
-const MONOLOGUR_TAG = 'monologur'
 const CACHE_TTL_MS = 5 * 60 * 1000
+const LOCAL_INSIGHTS_KEY = 'monologur-local-insights-v1'
+const LOCAL_INSIGHTS_MAX = 50
+// Bounded read: never pull the whole store into the prompt. Page size + ranked
+// top-K are both small; the model sees at most MEMORY_TOP_K lines.
+const MEMORY_FETCH_LIMIT = 200
+const MEMORY_TOP_K = 5
 
 let memoryCache: { at: number; memories: Memory[] } | null = null
 
@@ -25,7 +30,7 @@ async function fetchMemories(force = false): Promise<Memory[]> {
     return memoryCache.memories
   }
   try {
-    const r = await omiApi.get('/v3/memories', { params: { limit: 500, offset: 0 } })
+    const r = await omiApi.get('/v3/memories', { params: { limit: MEMORY_FETCH_LIMIT, offset: 0 } })
     const list = (Array.isArray(r.data) ? r.data : (r.data?.memories ?? [])) as Memory[]
     memoryCache = { at: now, memories: list }
     return list
@@ -41,7 +46,7 @@ async function fetchMemories(force = false): Promise<Memory[]> {
 export async function getMonologurMemoryContext(conversationText: string): Promise<string> {
   const memories = await fetchMemories()
   if (memories.length === 0) return ''
-  const ranked = rankMemories(memories, conversationText, 5)
+  const ranked = rankMemories(memories, conversationText, MEMORY_TOP_K)
   if (ranked.length === 0) return ''
   return [
     'Relevant memories about the user:',
@@ -50,27 +55,31 @@ export async function getMonologurMemoryContext(conversationText: string): Promi
 }
 
 /**
- * Persist a durable insight Monologur produced. Best-effort; failures are swallowed.
- * `dedupeKey` lets callers avoid writing the same line repeatedly.
+ * Store a Monologur insight LOCAL ONLY (localStorage ring buffer). This never
+ * touches the shared /v3/memories store, so a proactive surface cannot write
+ * account memory/tasks behind the user's back. Read back for continuity.
  */
-const written = new Set<string>()
-
-export async function saveMonologurInsight(text: string): Promise<void> {
+export function saveMonologurLocalInsight(text: string): void {
   const clean = text.trim()
   if (!clean) return
-  // Rough dedupe so we don't spam the memory store with near-identical lines.
-  const key = clean.toLowerCase().replace(/\s+/g, ' ').slice(0, 80)
-  if (written.has(key)) return
-  written.add(key)
-
   try {
-    await omiApi.post('/v3/memories', {
-      content: clean,
-      tags: [MONOLOGUR_TAG]
-    })
-    // Invalidate the read cache so a later context pull sees the new memory.
-    memoryCache = null
+    const raw = localStorage.getItem(LOCAL_INSIGHTS_KEY)
+    const list: string[] = raw ? (JSON.parse(raw) as string[]) : []
+    const key = clean.toLowerCase().replace(/\s+/g, ' ')
+    if (list.some((x) => x.toLowerCase().replace(/\s+/g, ' ') === key)) return
+    list.unshift(clean)
+    localStorage.setItem(LOCAL_INSIGHTS_KEY, JSON.stringify(list.slice(0, LOCAL_INSIGHTS_MAX)))
   } catch {
-    // Don't let a memory write failure break the proactive loop.
+    /* localStorage unavailable / quota — best-effort, never break the loop */
+  }
+}
+
+/** Recent local-only Monologur insights (for display/continuity). */
+export function getMonologurLocalInsights(): string[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_INSIGHTS_KEY)
+    return raw ? (JSON.parse(raw) as string[]) : []
+  } catch {
+    return []
   }
 }
