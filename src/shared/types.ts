@@ -812,6 +812,12 @@ export type AgentConfig = {
   llmBaseUrl?: string
   // OpenAI API key (for openai provider)
   llmApiKey?: string
+  // Local "brain" router (Laya sidecar): opt-in. When on, a local classifier
+  // decides whether a request can be handled locally (tools / small local LLM)
+  // vs. sent to the metered cloud — to save quota. Off by default.
+  localBrainEnabled?: boolean
+  // Sidecar base URL, e.g. http://127.0.0.1:8765
+  localBrainUrl?: string
 }
 
 // --- Local (OpenAI-compatible) tool agent loop (desktop) ---
