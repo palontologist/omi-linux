@@ -5,7 +5,13 @@ import WebSocket from 'ws'
 import fs from 'fs'
 import path from 'path'
 import { app } from 'electron'
-import type { AgentConfig, DeepgramVoice } from '../../shared/types'
+import type {
+  AgentConfig,
+  DeepgramVoice,
+  LocalAgentRequest,
+  LocalAgentResult,
+  LocalAgentToolEvent
+} from '../../shared/types'
 import { listLocalConversations, queryKgNodes } from './db'
 
 const AGENT_WS_URL = 'wss://agent.deepgram.com/v1/agent/converse'
@@ -32,7 +38,12 @@ type AgentMessage =
   | { type: 'SettingsApplied' }
   | { type: 'ConversationText'; role: 'user' | 'assistant'; content: string }
   | { type: 'AgentThinking'; content: string }
-  | { type: 'AgentStartedSpeaking'; total_latency: number; tts_latency: number; ttt_latency: number }
+  | {
+      type: 'AgentStartedSpeaking'
+      total_latency: number
+      tts_latency: number
+      ttt_latency: number
+    }
   | { type: 'AgentAudioDone' }
   | { type: 'Error'; description: string; code: string }
   | { type: 'Warning'; description: string; code: string }
@@ -46,9 +57,12 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case 'web_search': {
       const query = (args.query as string) || ''
       try {
-        const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0' }
-        })
+        const res = await fetch(
+          `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+          {
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+          }
+        )
         const html = await res.text()
         // Extract snippets from DuckDuckGo HTML results
         const snippets: string[] = []
@@ -73,7 +87,9 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const expr = (args.expression as string) || ''
       try {
         // Safe math evaluation (no eval)
-        const result = Function('"use strict"; return (' + expr.replace(/[^0-9+\-*/().%\s]/g, '') + ')')()
+        const result = Function(
+          '"use strict"; return (' + expr.replace(/[^0-9+\-*/().%\s]/g, '') + ')'
+        )()
         return `${expr} = ${result}`
       } catch {
         return `Could not calculate "${expr}". Please check the expression.`
@@ -84,7 +100,9 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       try {
         const graph = queryKgNodes(query)
         if (graph.nodes.length === 0) return 'No relevant local memories found.'
-        const context = graph.nodes.map(n => `[${n.nodeType}] ${n.label}: ${n.summary}`).join('\n')
+        const context = graph.nodes
+          .map((n) => `[${n.nodeType}] ${n.label}: ${n.summary}`)
+          .join('\n')
         return `Relevant local memories:\n${context}`
       } catch (e) {
         return `Memory search failed: ${(e as Error).message}`
@@ -115,22 +133,108 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const message = (args.message as string) || ''
       const minutes = (args.minutes_from_now as number) || 0
       // Schedule reminder via renderer notification
-      setTimeout(() => {
-        // Find any open window and send notification
-        const { BrowserWindow } = require('electron')
-        const wins = BrowserWindow.getAllWindows()
-        for (const win of wins) {
-          if (!win.isDestroyed()) {
-            win.webContents.send('deepgram-agent:reminder', { message, triggeredAt: Date.now() })
+      setTimeout(
+        () => {
+          // Find any open window and send notification
+          const { BrowserWindow } = require('electron')
+          const wins = BrowserWindow.getAllWindows()
+          for (const win of wins) {
+            if (!win.isDestroyed()) {
+              win.webContents.send('deepgram-agent:reminder', { message, triggeredAt: Date.now() })
+            }
           }
-        }
-      }, minutes * 60 * 1000)
+        },
+        minutes * 60 * 1000
+      )
       return `Reminder set: "${message}" in ${minutes} minute${minutes !== 1 ? 's' : ''}`
     }
     default:
       return `Unknown tool: ${name}`
   }
 }
+
+// Tool schemas (name/description/JSON-Schema params) shared by the Deepgram voice
+// agent (as `functions`) and the local OpenAI-compatible agent (wrapped as
+// `{ type:'function', function }`). `executeTool` above implements every name here.
+const AGENT_TOOL_SCHEMAS = [
+  {
+    name: 'web_search',
+    description:
+      'Search the web for current information. Use when asked about news, facts, or anything you are not sure about.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'The search query' } },
+      required: ['query']
+    }
+  },
+  {
+    name: 'get_time',
+    description: 'Get the current date and time.',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'calculate',
+    description: 'Perform a mathematical calculation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', description: 'Math expression to evaluate, e.g. "2 + 2"' }
+      },
+      required: ['expression']
+    }
+  },
+  {
+    name: 'search_local_memories',
+    description:
+      "Search the user's local knowledge graph for personal memories, preferences, and project details.",
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'What to look up in local memories' } },
+      required: ['query']
+    }
+  },
+  {
+    name: 'write_file',
+    description:
+      'Write text or code to a file on the local system (e.g. to build a game, script, or document).',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Absolute path to write' },
+        content: { type: 'string', description: 'File contents' }
+      },
+      required: ['filePath', 'content']
+    }
+  },
+  {
+    name: 'open_url',
+    description: 'Open a URL or file path in the default application/browser.',
+    parameters: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'The URL or file path to open' } },
+      required: ['url']
+    }
+  },
+  {
+    name: 'set_reminder',
+    description: 'Set a reminder for the user.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'What to remind about' },
+        minutes_from_now: { type: 'number', description: 'Minutes from now to trigger' }
+      },
+      required: ['message', 'minutes_from_now']
+    }
+  }
+] as const
+
+const LOCAL_AGENT_SYSTEM =
+  'You are Omi, a helpful local assistant running on the user\u2019s computer. ' +
+  'Use the available tools when they help: search local memories for personal context, ' +
+  'web_search for facts, calculate, get_time, write_file + open_url to build/run things, ' +
+  'and set_reminder. Prefer a tool over guessing. When you have enough, answer concisely ' +
+  'in plain language. Never invent file results \u2014 call write_file and report what it returns.'
 
 function handleFunctionCall(
   session: AgentSession,
@@ -143,40 +247,48 @@ function handleFunctionCall(
   let args: Record<string, unknown> = {}
   try {
     args = JSON.parse(argsJson)
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   console.log(`[agent] executing tool: ${name}(${JSON.stringify(args)})`)
 
-  executeTool(name, args).then((result) => {
-    console.log(`[agent] tool result: ${name} -> ${result.substring(0, 100)}...`)
-    // Send function call response back to Deepgram
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'SendFunctionCallResponse',
-        id,
+  executeTool(name, args)
+    .then((result) => {
+      console.log(`[agent] tool result: ${name} -> ${result.substring(0, 100)}...`)
+      // Send function call response back to Deepgram
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: 'SendFunctionCallResponse',
+            id,
+            name,
+            content: result
+          })
+        )
+      }
+      // Also notify renderer
+      emit(session.ownerId, 'deepgram-agent:message', {
+        sessionId,
+        kind: 'functionCall',
         name,
-        content: result
-      }))
-    }
-    // Also notify renderer
-    emit(session.ownerId, 'deepgram-agent:message', {
-      sessionId,
-      kind: 'functionCall',
-      name,
-      args,
-      result
+        args,
+        result
+      })
     })
-  }).catch((err) => {
-    console.error(`[agent] tool error: ${name}:`, err)
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'SendFunctionCallResponse',
-        id,
-        name,
-        content: `Error executing ${name}: ${(err as Error).message}`
-      }))
-    }
-  })
+    .catch((err) => {
+      console.error(`[agent] tool error: ${name}:`, err)
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: 'SendFunctionCallResponse',
+            id,
+            name,
+            content: `Error executing ${name}: ${(err as Error).message}`
+          })
+        )
+      }
+    })
 }
 
 function startAgentSession(
@@ -187,7 +299,11 @@ function startAgentSession(
 ): void {
   const existing = sessions.get(sessionId)
   if (existing) {
-    try { existing.ws.close() } catch { /* ignore */ }
+    try {
+      existing.ws.close()
+    } catch {
+      /* ignore */
+    }
     sessions.delete(sessionId)
   }
 
@@ -223,7 +339,8 @@ function startAgentSession(
     const tools = [
       {
         name: 'web_search',
-        description: 'Search the web for current information. Use this when the user asks about news, facts, or anything you are not sure about.',
+        description:
+          'Search the web for current information. Use this when the user asks about news, facts, or anything you are not sure about.',
         parameters: {
           type: 'object',
           properties: {
@@ -243,29 +360,40 @@ function startAgentSession(
         parameters: {
           type: 'object',
           properties: {
-            expression: { type: 'string', description: 'Math expression to evaluate, e.g. "2 + 2" or "sqrt(144)"' }
+            expression: {
+              type: 'string',
+              description: 'Math expression to evaluate, e.g. "2 + 2" or "sqrt(144)"'
+            }
           },
           required: ['expression']
         }
       },
       {
         name: 'search_local_memories',
-        description: 'Search the user\'s local knowledge graph for personal memories, preferences, and project details.',
+        description:
+          "Search the user's local knowledge graph for personal memories, preferences, and project details.",
         parameters: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: 'The search query to find relevant local memories' }
+            query: {
+              type: 'string',
+              description: 'The search query to find relevant local memories'
+            }
           },
           required: ['query']
         }
       },
       {
         name: 'write_file',
-        description: 'Write text or code to a file on the local system. Use this to build games, scripts, or documents.',
+        description:
+          'Write text or code to a file on the local system. Use this to build games, scripts, or documents.',
         parameters: {
           type: 'object',
           properties: {
-            filePath: { type: 'string', description: 'The absolute path where the file should be saved' },
+            filePath: {
+              type: 'string',
+              description: 'The absolute path where the file should be saved'
+            },
             content: { type: 'string', description: 'The content to write to the file' }
           },
           required: ['filePath', 'content']
@@ -289,7 +417,10 @@ function startAgentSession(
           type: 'object',
           properties: {
             message: { type: 'string', description: 'What to remind the user about' },
-            minutes_from_now: { type: 'number', description: 'Minutes from now to trigger the reminder' }
+            minutes_from_now: {
+              type: 'number',
+              description: 'Minutes from now to trigger the reminder'
+            }
           },
           required: ['message', 'minutes_from_now']
         }
@@ -310,6 +441,17 @@ function startAgentSession(
           baseUrl: llmBaseUrl || 'http://localhost:11434/v1'
         }
         console.log(`[agent] using Ollama: ${thinkProvider.model} at ${thinkProvider.baseUrl}`)
+        break
+      case 'local':
+        // Any OpenAI-compatible endpoint: llama-server (:8080/v1), LM Studio, vLLM, etc.
+        thinkProvider = {
+          type: 'open_ai',
+          model: llmModel || 'local-model',
+          baseUrl: llmBaseUrl || 'http://localhost:8080/v1'
+        }
+        console.log(
+          `[agent] using local OpenAI-compatible: ${thinkProvider.model} at ${thinkProvider.baseUrl}`
+        )
         break
       case 'openai':
         thinkProvider = {
@@ -364,7 +506,9 @@ function startAgentSession(
         ...(contextMessages.length > 0 ? { context: { messages: contextMessages } } : {})
       }
     }
-    console.log(`[agent] sending settings with ${tools.length} tools, ${contextMessages.length} context messages`)
+    console.log(
+      `[agent] sending settings with ${tools.length} tools, ${contextMessages.length} context messages`
+    )
     ws.send(JSON.stringify(settings))
     // Flush buffered audio
     for (const chunk of session.buffer) {
@@ -476,7 +620,17 @@ function startAgentSession(
         })
         break
       case 'FunctionCallRequest': {
-        const funcs = (msg as { functions?: Array<{ id: string; name: string; arguments: string; client_side: boolean }> }).functions || []
+        const funcs =
+          (
+            msg as {
+              functions?: Array<{
+                id: string
+                name: string
+                arguments: string
+                client_side: boolean
+              }>
+            }
+          ).functions || []
         console.log(`[agent] function call request: ${funcs.length} functions`)
         for (const fn of funcs) {
           if (fn.client_side) {
@@ -534,9 +688,12 @@ function stopAgent(sessionId: string): void {
   s.closed = true
   if (s.keepalive) clearInterval(s.keepalive)
   sessions.delete(sessionId)
-  try { s.ws.close(1000, 'client close') } catch { /* ignore */ }
+  try {
+    s.ws.close(1000, 'client close')
+  } catch {
+    /* ignore */
+  }
 }
-
 
 function loadSoulMd(): string {
   // Try app root first (dev/build), then resources path (packaged), then user config
@@ -551,7 +708,9 @@ function loadSoulMd(): string {
       const content = fs.readFileSync(p, 'utf-8')
       console.log(`[agent] loaded soul.md from: ${p}`)
       return content
-    } catch { /* continue */ }
+    } catch {
+      /* continue */
+    }
   }
   console.warn('[agent] no soul.md found, using default personality')
   return ''
@@ -614,7 +773,7 @@ Core rules:
 - Never say "as an AI" or use disclaimes.
 - Match the user's energy. If they are brief, be brief. If they are excited, be excited.`
   }
-  
+
   if (wakeWord) {
     prompt += `
     
@@ -630,7 +789,7 @@ Activation:
 - You respond to everything the user says, but be sharp and avoid rambling.
 - If you sense the user is talking to someone else, stay brief or silent.`
   }
-  
+
   if (clarification) {
     prompt += `
     
@@ -638,7 +797,7 @@ Clarification:
 - If a request is ambiguous, ask one sharp clarifying question. Don't guess.
 - Keep it short: "Which project do you mean?" not "I'm not sure which project you're referring to, could you please clarify?"`
   }
-  
+
   prompt += `
   
 Intelligence & Memory:
@@ -654,7 +813,7 @@ Action Capability:
 Conversation awareness:
 - You hear the user's side of conversations. Offer brief, high-value insights only when genuinely helpful.
 - Be the "smartest person in the room" who knows when to speak and when to listen.`
-  
+
   // Inject conversation context if provided
   if (config.conversationContext) {
     prompt += `
@@ -777,20 +936,102 @@ export function registerDeepgramAgentHandlers(): void {
     return voices
   })
 
-  // Ollama health check — verifies local LLM is reachable
-  ipcMain.handle('deepgram-agent:ollamaCheck', async () => {
+  // Local model health check — probes an OpenAI-compatible /v1/models endpoint.
+  // Works for llama-server (http://localhost:8080/v1), LM Studio, and Ollama
+  // (which exposes the same /v1/models route). Accepts an arbitrary base URL so
+  // the "local" route isn't pinned to Ollama's 11434.
+  ipcMain.handle('deepgram-agent:ollamaCheck', async (_e, baseUrl?: string) => {
+    const base = (baseUrl || 'http://localhost:8080/v1').replace(/\/$/, '')
     try {
-      const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(3000) })
-      if (res.ok) {
-        const data = await res.json() as { models?: Array<{ name: string }> }
-        return {
-          ok: true,
-          models: (data.models ?? []).map((m) => m.name)
-        }
+      const res = await fetch(`${base}/models`, { signal: AbortSignal.timeout(3000) })
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+      const data = (await res.json()) as {
+        data?: Array<{ id?: string; model?: string }>
+        models?: Array<{ name?: string; model?: string }>
       }
-      return { ok: false, error: `HTTP ${res.status}` }
+      const ids = (data.data ?? data.models ?? [])
+        .map((m) => m.id ?? m.model ?? m.name)
+        .filter((x): x is string => Boolean(x))
+      return { ok: true, models: ids }
     } catch (e) {
       return { ok: false, error: (e as Error).message }
     }
   })
+
+  // Local (OpenAI-compatible) tool agent — a bounded perceive→tool→answer loop
+  // against a local endpoint (llama-server / LM Studio / Ollama). Reuses the same
+  // on-device `executeTool` as the voice agent; the transcript + tool work never
+  // leave the machine, and it bypasses the cloud per-month call limit. Returns the
+  // final text plus a log of executed tools for the UI.
+  ipcMain.handle(
+    'local-agent:run',
+    async (_e, req: LocalAgentRequest): Promise<LocalAgentResult> => {
+      const base = (req.baseUrl || 'http://localhost:8080/v1').replace(/\/$/, '')
+      const openAiTools = AGENT_TOOL_SCHEMAS.map((f) => ({ type: 'function', function: f }))
+      type ToolCall = {
+        id?: string
+        type?: string
+        function?: { name?: string; arguments?: string }
+      }
+      type Msg = {
+        role: 'system' | 'user' | 'assistant' | 'tool'
+        content?: string
+        tool_calls?: ToolCall[]
+        tool_call_id?: string
+        name?: string
+      }
+      const messages: Msg[] = [
+        { role: 'system', content: req.system || LOCAL_AGENT_SYSTEM },
+        ...(req.history ?? []),
+        { role: 'user', content: req.userText }
+      ]
+      const tools: LocalAgentToolEvent[] = []
+      const MAX_ITERS = 5
+      try {
+        for (let i = 0; i < MAX_ITERS; i++) {
+          const res = await fetch(`${base}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: req.model,
+              messages,
+              tools: openAiTools,
+              tool_choice: 'auto',
+              temperature: 0.3
+            }),
+            signal: AbortSignal.timeout(45_000)
+          })
+          if (!res.ok) {
+            const body = (await res.text()).slice(0, 300)
+            return { text: '', tools, error: `HTTP ${res.status}: ${body}` }
+          }
+          const data = (await res.json()) as {
+            choices?: Array<{ message?: Msg }>
+          }
+          const msg = data.choices?.[0]?.message
+          const calls = msg?.tool_calls ?? []
+          if (calls.length) {
+            messages.push({ role: 'assistant', content: msg?.content ?? '', tool_calls: calls })
+            for (const c of calls) {
+              const name = c.function?.name || ''
+              let args: Record<string, unknown> = {}
+              try {
+                args = JSON.parse(c.function?.arguments || '{}') as Record<string, unknown>
+              } catch {
+                /* tolerate malformed args */
+              }
+              const result = await executeTool(name, args)
+              tools.push({ name, args, result })
+              messages.push({ role: 'tool', tool_call_id: c.id, name, content: result })
+            }
+            continue
+          }
+          return { text: (msg?.content ?? '').trim(), tools }
+        }
+        return { text: '(stopped after too many tool steps)', tools }
+      } catch (e) {
+        return { text: '', tools, error: (e as Error).message }
+      }
+    }
+  )
 }

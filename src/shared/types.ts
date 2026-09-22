@@ -334,7 +334,12 @@ export type OmiBridgeApi = {
   onDeepgramAgentMessage: (cb: (msg: AgentMessage) => void) => () => void
   onDeepgramAgentAudio: (cb: (msg: AgentAudioMessage) => void) => () => void
   onDeepgramSignUpdate: (cb: (result: TranslationResult) => void) => () => void
-  deepgramAgentOllamaCheck: () => Promise<{ ok: boolean; models?: string[]; error?: string }>
+  deepgramAgentOllamaCheck: (
+    baseUrl?: string
+  ) => Promise<{ ok: boolean; models?: string[]; error?: string }>
+  // Local (OpenAI-compatible) tool agent: runs a bounded tools loop against a
+  // local endpoint (llama-server / LM Studio / Ollama) in the main process.
+  localAgentRun: (req: LocalAgentRequest) => Promise<LocalAgentResult>
 }
 
 // --- Screen activity → memories (Rewind OCR synthesis) ---
@@ -618,7 +623,12 @@ export type OcrResult =
   | { ok: true; fullText: string; lines: OcrLine[] }
   | {
       ok: false
-      code: 'NO_LANGUAGE' | 'DECODE_FAILED' | 'HELPER_ERROR' | 'TESSERACT_NOT_FOUND' | 'TESSERACT_ERROR'
+      code:
+        | 'NO_LANGUAGE'
+        | 'DECODE_FAILED'
+        | 'HELPER_ERROR'
+        | 'TESSERACT_NOT_FOUND'
+        | 'TESSERACT_ERROR'
       message?: string
     }
 
@@ -793,8 +803,9 @@ export type AgentConfig = {
   }
   // Cloud memories from api.omi.me/v3/memories
   memories?: Array<{ content: string; category?: string }>
-  // LLM provider selection: 'deepgram' | 'openai' | 'ollama'
-  llmProvider?: 'deepgram' | 'openai' | 'ollama'
+  // LLM provider selection: 'deepgram' | 'openai' | 'ollama' | 'local'
+  // 'local' = any OpenAI-compatible /v1/chat/completions endpoint (llama-server, LM Studio, etc.)
+  llmProvider?: 'deepgram' | 'openai' | 'ollama' | 'local'
   // Custom model name (for ollama: e.g. "qwen3.5", for openai: "gpt-4o-mini")
   llmModel?: string
   // Custom base URL (for ollama: "http://localhost:11434/v1")
@@ -803,17 +814,54 @@ export type AgentConfig = {
   llmApiKey?: string
 }
 
+// --- Local (OpenAI-compatible) tool agent loop (desktop) ---
+export type LocalAgentRequest = {
+  baseUrl: string // e.g. http://localhost:8080/v1
+  model: string
+  userText: string
+  system?: string
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>
+}
+export type LocalAgentToolEvent = {
+  name: string
+  args: Record<string, unknown>
+  result: string
+}
+export type LocalAgentResult = {
+  text: string
+  tools: LocalAgentToolEvent[]
+  error?: string
+}
+
 export type AgentMessage =
   | { sessionId: string; kind: 'connected'; requestId: string }
   | { sessionId: string; kind: 'settingsApplied' }
   | { sessionId: string; kind: 'conversationText'; role: 'user' | 'assistant'; content: string }
   | { sessionId: string; kind: 'thinking'; content: string }
-  | { sessionId: string; kind: 'agentSpeaking'; totalLatency: number; ttsLatency: number; tttLatency: number }
+  | {
+      sessionId: string
+      kind: 'agentSpeaking'
+      totalLatency: number
+      ttsLatency: number
+      tttLatency: number
+    }
   | { sessionId: string; kind: 'agentAudioDone' }
-  | { sessionId: string; kind: 'functionCall'; name: string; args: Record<string, unknown>; result: string }
+  | {
+      sessionId: string
+      kind: 'functionCall'
+      name: string
+      args: Record<string, unknown>
+      result: string
+    }
   | { sessionId: string; kind: 'error'; message: string; code?: string; fatal?: boolean }
   | { sessionId: string; kind: 'closed'; code: number; reason: string }
-  | { sessionId: string; kind: 'history'; role?: string; content?: string; functionCalls?: unknown[] }
+  | {
+      sessionId: string
+      kind: 'history'
+      role?: string
+      content?: string
+      functionCalls?: unknown[]
+    }
   | { sessionId: string; kind: 'userSpeaking' }
 
 export type AgentAudioMessage = {

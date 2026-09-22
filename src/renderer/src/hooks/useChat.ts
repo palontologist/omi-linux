@@ -7,6 +7,7 @@ import { looksLikeAction, looksLikeRawPlan, planActions } from '../lib/actionPla
 import { callAgentLLM } from '../lib/agentLLM'
 import type { AutomationPlan } from '../../../shared/types'
 import { getPreferences } from '../lib/preferences'
+import { readAgentSettings, isLocalProviderActive } from '../lib/agentSettings'
 import { resolveChatId, mergeChatMessages } from '../lib/chatConversation'
 
 export type ChatMsg = { id?: string; role: 'user' | 'assistant'; content: string }
@@ -236,10 +237,54 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
     setHistory((h) => [...h, { id: assistantId, role: 'assistant', content: '' }])
     setSending(true)
 
+    let assistantText = ''
+
+    // Local route: when the provider is a local OpenAI-compatible endpoint
+    // (llama-server / LM Studio / Ollama), run the on-device tool agent in the
+    // main process instead of the metered cloud /v2/messages. Bounded tool loop,
+    // transcripts never leave the machine. Falls back to the cloud path on error.
+    if (isLocalProviderActive()) {
+      const cfg = readAgentSettings()
+      const prior = baseHistory.slice(-8).map((m) => ({ role: m.role, content: m.content }))
+      const r = await window.omi.localAgentRun({
+        baseUrl: cfg.llmBaseUrl || 'http://localhost:8080/v1',
+        model: cfg.llmModel || 'local-model',
+        userText: userMsg.content,
+        history: prior
+      })
+      if (!r.error) {
+        const used = r.tools.map((t) => t.name)
+        assistantText =
+          r.text +
+          (used.length
+            ? `\n\n_${used.length} tool${used.length > 1 ? 's' : ''}: ${used.join(', ')}_`
+            : '')
+        setHistory((h) => {
+          const next = [...h]
+          next[next.length - 1] = { id: assistantId, role: 'assistant', content: assistantText }
+          return next
+        })
+        void persistChat(buildThread(assistantText))
+        sendingRef.current = false
+        setSending(false)
+        return
+      }
+      // On local error, surface it in the bubble rather than silently clouding.
+      assistantText = `⚠️ Local model failed: ${r.error}\n(Start it with: llama-server -m <model.gguf> --port 8080 --jinja, or switch the provider off in Settings.)`
+      setHistory((h) => {
+        const next = [...h]
+        next[next.length - 1] = { id: assistantId, role: 'assistant', content: assistantText }
+        return next
+      })
+      void persistChat(buildThread(assistantText))
+      sendingRef.current = false
+      setSending(false)
+      return
+    }
+
     void persistChat(buildThread(''))
     let lastPersist = Date.now()
 
-    let assistantText = ''
     try {
       const token = await auth.currentUser?.getIdToken()
       // Hybrid pre-step: gather context to PREPEND to the text we send (not what we
@@ -320,7 +365,7 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
       // keyword-less follow-up like "again"). Don't render that raw in the thread.
       if (looksLikeRawPlan(assistantText)) {
         assistantText =
-          "It looks like you want me to do something in an app. Phrase it as a direct command (e.g. \"type report in the search box\") with that app focused, and I'll show you a plan to approve."
+          'It looks like you want me to do something in an app. Phrase it as a direct command (e.g. "type report in the search box") with that app focused, and I\'ll show you a plan to approve.'
         setHistory((h) => {
           const next = [...h]
           next[next.length - 1] = { id: assistantId, role: 'assistant', content: assistantText }
