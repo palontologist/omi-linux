@@ -23,7 +23,9 @@ import type {
   AgentConfig,
   TranslationResult,
   AgentMessage,
-  AgentAudioMessage
+  AgentAudioMessage,
+  LocalAgentRequest,
+  LocalAgentResult
 } from '../shared/types'
 
 const omi: OmiBridgeApi = {
@@ -195,14 +197,18 @@ const omi: OmiBridgeApi = {
   },
   onDeepgramSignUpdate: (cb: (result: TranslationResult) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, result: TranslationResult): void => {
-      console.log('[Preload] Received omi-sign-update:', result);
+      console.log('[Preload] Received omi-sign-update:', result)
       cb(result)
     }
     ipcRenderer.on('omi-sign-update', listener)
     return () => ipcRenderer.removeListener('omi-sign-update', listener)
   },
-  deepgramAgentOllamaCheck: (): Promise<{ ok: boolean; models?: string[]; error?: string }> =>
-    ipcRenderer.invoke('deepgram-agent:ollamaCheck')
+  deepgramAgentOllamaCheck: (
+    baseUrl?: string
+  ): Promise<{ ok: boolean; models?: string[]; error?: string }> =>
+    ipcRenderer.invoke('deepgram-agent:ollamaCheck', baseUrl),
+  localAgentRun: (req: LocalAgentRequest): Promise<LocalAgentResult> =>
+    ipcRenderer.invoke('local-agent:run', req)
 }
 
 const omiOverlay: OmiOverlayApi = {
