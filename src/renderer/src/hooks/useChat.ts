@@ -8,6 +8,7 @@ import { callAgentLLM } from '../lib/agentLLM'
 import type { AutomationPlan } from '../../../shared/types'
 import { getPreferences } from '../lib/preferences'
 import { readAgentSettings, isLocalProviderActive } from '../lib/agentSettings'
+import { planFromDecision, requestLocalBrain } from '../lib/localBrain'
 import { resolveChatId, mergeChatMessages } from '../lib/chatConversation'
 
 export type ChatMsg = { id?: string; role: 'user' | 'assistant'; content: string }
@@ -243,12 +244,16 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
     // (llama-server / LM Studio / Ollama), run the on-device tool agent in the
     // main process instead of the metered cloud /v2/messages. Bounded tool loop,
     // transcripts never leave the machine. Falls back to the cloud path on error.
-    if (isLocalProviderActive()) {
-      const cfg = readAgentSettings()
-      const prior = baseHistory.slice(-8).map((m) => ({ role: m.role, content: m.content }))
+    const localCfg = readAgentSettings()
+    const hasLocalLLM = Boolean(localCfg.llmBaseUrl) || isLocalProviderActive()
+    const prior = baseHistory.slice(-8).map((m) => ({ role: m.role, content: m.content }))
+
+    // Runs the local OpenAI tool-agent and renders it; returns true if it handled
+    // the turn (success OR surfaced error), false to let the caller fall back.
+    const runLocalAnswer = async (): Promise<boolean> => {
       const r = await window.omi.localAgentRun({
-        baseUrl: cfg.llmBaseUrl || 'http://localhost:8080/v1',
-        model: cfg.llmModel || 'local-model',
+        baseUrl: localCfg.llmBaseUrl || 'http://localhost:8080/v1',
+        model: localCfg.llmModel || 'local-model',
         userText: userMsg.content,
         history: prior
       })
@@ -259,6 +264,42 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
           (used.length
             ? `\n\n_${used.length} tool${used.length > 1 ? 's' : ''}: ${used.join(', ')}_`
             : '')
+      } else {
+        assistantText = `⚠️ Local model failed: ${r.error}\n(Start it with: llama-server -m <model.gguf> --port 8080 --jinja, or turn the local route off in Settings.)`
+      }
+      setHistory((h) => {
+        const next = [...h]
+        next[next.length - 1] = { id: assistantId, role: 'assistant', content: assistantText }
+        return next
+      })
+      void persistChat(buildThread(assistantText))
+      sendingRef.current = false
+      setSending(false)
+      return true
+    }
+
+    // Explicit "Local" provider always runs local.
+    if (isLocalProviderActive()) {
+      await runLocalAnswer()
+      return
+    }
+
+    // Local "brain" router (Laya sidecar): opt-in. Asks a cheap local classifier
+    // whether the turn can be handled locally (tools / small local LLM) before
+    // spending a metered cloud call. Any error/timeout/unknown -> cloud (default).
+    if (localCfg.localBrainEnabled && hasLocalLLM) {
+      const decision = await requestLocalBrain(
+        localCfg.localBrainUrl || 'http://127.0.0.1:8765',
+        userMsg.content
+      )
+      const plan = planFromDecision(decision, hasLocalLLM)
+      if (plan.kind === 'local_tools' || plan.kind === 'local_llm') {
+        await runLocalAnswer()
+        return
+      }
+      if (plan.kind === 'confirm') {
+        assistantText =
+          'That looks like it touches something sensitive, so I didn’t run it. Ask again and I’ll confirm the specifics first.'
         setHistory((h) => {
           const next = [...h]
           next[next.length - 1] = { id: assistantId, role: 'assistant', content: assistantText }
@@ -269,17 +310,7 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
         setSending(false)
         return
       }
-      // On local error, surface it in the bubble rather than silently clouding.
-      assistantText = `⚠️ Local model failed: ${r.error}\n(Start it with: llama-server -m <model.gguf> --port 8080 --jinja, or switch the provider off in Settings.)`
-      setHistory((h) => {
-        const next = [...h]
-        next[next.length - 1] = { id: assistantId, role: 'assistant', content: assistantText }
-        return next
-      })
-      void persistChat(buildThread(assistantText))
-      sendingRef.current = false
-      setSending(false)
-      return
+      // plan.kind === 'cloud' -> fall through to the metered path.
     }
 
     void persistChat(buildThread(''))
