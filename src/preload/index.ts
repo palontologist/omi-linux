@@ -25,7 +25,10 @@ import type {
   AgentMessage,
   AgentAudioMessage,
   LocalAgentRequest,
-  LocalAgentResult
+  LocalAgentResult,
+  ModelEntry,
+  ModelStatus,
+  ModelDownloadProgress
 } from '../shared/types'
 
 const omi: OmiBridgeApi = {
@@ -208,7 +211,19 @@ const omi: OmiBridgeApi = {
   ): Promise<{ ok: boolean; models?: string[]; error?: string }> =>
     ipcRenderer.invoke('deepgram-agent:ollamaCheck', baseUrl),
   localAgentRun: (req: LocalAgentRequest): Promise<LocalAgentResult> =>
-    ipcRenderer.invoke('local-agent:run', req)
+    ipcRenderer.invoke('local-agent:run', req),
+  modelsList: (): Promise<ModelEntry[]> => ipcRenderer.invoke('models:list'),
+  modelsStatus: (): Promise<ModelStatus[]> => ipcRenderer.invoke('models:status'),
+  modelsDownload: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('models:download', id),
+  modelsCancel: (id: string): Promise<boolean> => ipcRenderer.invoke('models:cancel', id),
+  modelsDelete: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('models:delete', id),
+  onModelsProgress: (cb: (p: ModelDownloadProgress) => void): (() => void) => {
+    const listener = (_e: unknown, p: ModelDownloadProgress): void => cb(p)
+    ipcRenderer.on('models:progress', listener)
+    return () => ipcRenderer.removeListener('models:progress', listener)
+  }
 }
 
 const omiOverlay: OmiOverlayApi = {

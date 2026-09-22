@@ -340,6 +340,13 @@ export type OmiBridgeApi = {
   // Local (OpenAI-compatible) tool agent: runs a bounded tools loop against a
   // local endpoint (llama-server / LM Studio / Ollama) in the main process.
   localAgentRun: (req: LocalAgentRequest) => Promise<LocalAgentResult>
+  // --- Local model download manager ---
+  modelsList: () => Promise<ModelEntry[]>
+  modelsStatus: () => Promise<ModelStatus[]>
+  modelsDownload: (id: string) => Promise<{ ok: boolean; error?: string }>
+  modelsCancel: (id: string) => Promise<boolean>
+  modelsDelete: (id: string) => Promise<{ ok: boolean; error?: string }>
+  onModelsProgress: (cb: (p: ModelDownloadProgress) => void) => () => void
 }
 
 // --- Screen activity → memories (Rewind OCR synthesis) ---
@@ -874,3 +881,40 @@ export type AgentAudioMessage = {
   sessionId: string
   audio: string // base64-encoded PCM16 audio
 }
+
+// --- Local model download manager (desktop) ---
+// Lets the app offer a curated list of GGUF models and fetch them itself (resume
+// + sha256 verify + reuse of any file already in the user's Hugging Face cache),
+// instead of telling users to hand-wire llama-server. Mirrors the team's ask.
+
+export type ModelKind = 'text' | 'vision'
+
+export type ModelEntry = {
+  id: string // stable slug, e.g. 'qwen2.5-7b-instruct-q4km'
+  label: string // human label
+  repo: string // Hugging Face repo id, e.g. 'bartowski/Qwen2.5-7B-Instruct-GGUF'
+  file: string // GGUF filename within the repo
+  revision: string // 'main' or a commit sha (pins for cache dedupe)
+  sizeBytes: number // expected size (progress + preflight disk check)
+  sha256?: string // expected LFS sha256 if known -> enables verify + cache hit
+  minRamGb: number // advisory gate for the UI
+  vision: boolean
+}
+
+export type ModelInstallState = 'absent' | 'partial' | 'installed'
+
+export type ModelStatus = {
+  entry: ModelEntry
+  state: ModelInstallState
+  bytesOnDisk: number // installed file size, or partial bytes
+  fromCache: boolean // satisfied from the HF cache without a network download
+}
+
+export type ModelDownloadProgress = {
+  id: string
+  received: number
+  total: number
+  phase: 'cache' | 'download' | 'verify' | 'done' | 'error' | 'cancelled'
+  error?: string
+}
+
