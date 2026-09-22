@@ -54,6 +54,7 @@ import { perfMark, flushPerfMarks } from '../shared/perf'
 import { registerDeepgramListenHandlers, setDeepgramApiKey } from './ipc/deepgramListen'
 import { registerDeepgramTtsHandlers, setDeepgramTtsApiKey } from './ipc/deepgramTts'
 import { registerDeepgramAgentHandlers, setAgentApiKey } from './ipc/deepgramAgent'
+import { registerModelManagerHandlers } from './ipc/models'
 
 // Default the perf log to the user data dir so marks double as lightweight prod
 // telemetry. The bench runner overrides OMI_PERF_LOG to point at .bench/.
@@ -395,6 +396,7 @@ app.whenReady().then(async () => {
   registerDeepgramListenHandlers()
   registerDeepgramTtsHandlers()
   registerDeepgramAgentHandlers()
+  registerModelManagerHandlers()
 
   const mainWindow = createWindow()
 
