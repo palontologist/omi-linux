@@ -36,7 +36,9 @@ function loadAgentSettings(): AgentConfig {
 }
 
 function saveAgentSettings(config: AgentConfig): void {
-  localStorage.setItem('agent-settings-v1', JSON.stringify(config))
+  // Merge, not replace: a caller updating one field must not silently drop
+  // others (e.g. the local-brain fields would vanish on every LLM edit).
+  localStorage.setItem('agent-settings-v1', JSON.stringify({ ...loadAgentSettings(), ...config }))
 }
 
 export function GeneralTab(): React.JSX.Element {
@@ -65,6 +67,17 @@ export function GeneralTab(): React.JSX.Element {
   )
   const [llmModel, setLlmModel] = useState(() => loadAgentSettings().llmModel || '')
   const [llmBaseUrl, setLlmBaseUrl] = useState(() => loadAgentSettings().llmBaseUrl || '')
+  const [localBrainEnabled, setLocalBrainEnabled] = useState(
+    () => loadAgentSettings().localBrainEnabled === true
+  )
+  const [localBrainUrl, setLocalBrainUrl] = useState(
+    () => loadAgentSettings().localBrainUrl || 'http://127.0.0.1:8765'
+  )
+  const [brainStatus, setBrainStatus] = useState<{ checked: boolean; ok: boolean; mode: string }>({
+    checked: false,
+    ok: false,
+    mode: ''
+  })
   const [ollamaStatus, setOllamaStatus] = useState<{
     checked: boolean
     ok: boolean
@@ -546,6 +559,76 @@ export function GeneralTab(): React.JSX.Element {
                   Available: {ollamaStatus.models.slice(0, 5).join(', ')}
                 </div>
               )}
+            {/* Local brain router (Laya sidecar): routes a turn to the local LLM /
+                local tools / cloud. Only useful once a local LLM base URL is set. */}
+            {(llmProvider === 'local' || llmBaseUrl) && (
+              <div className="mt-2 flex flex-col gap-2 text-xs">
+                <label className="flex items-center gap-2 text-white/80">
+                  <input
+                    type="checkbox"
+                    checked={localBrainEnabled}
+                    onChange={(e) => {
+                      const v = e.target.checked
+                      setLocalBrainEnabled(v)
+                      saveAgentSettings({
+                        agentName,
+                        personality,
+                        activationMode,
+                        clarificationEnabled,
+                        llmProvider,
+                        llmModel,
+                        llmBaseUrl: llmBaseUrl || undefined,
+                        localBrainEnabled: v,
+                        localBrainUrl: localBrainUrl || undefined
+                      })
+                    }}
+                  />
+                  Use local brain router (classify intent/difficulty)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={localBrainUrl}
+                    onChange={(e) => {
+                      setLocalBrainUrl(e.target.value)
+                      saveAgentSettings({
+                        agentName,
+                        personality,
+                        activationMode,
+                        clarificationEnabled,
+                        llmProvider,
+                        llmModel,
+                        llmBaseUrl: llmBaseUrl || undefined,
+                        localBrainEnabled,
+                        localBrainUrl: e.target.value || undefined
+                      })
+                    }}
+                    placeholder="http://127.0.0.1:8765"
+                    className="w-56 rounded-md bg-white/10 px-2 py-1 text-white focus:outline-none"
+                  />
+                  <button
+                    onClick={async () => {
+                      try {
+                        const r = await fetch(
+                          `${localBrainUrl.replace(/\/$/, '')}/health`,
+                          { signal: AbortSignal.timeout(3000) }
+                        )
+                        const j = (await r.json()) as { mode?: string }
+                        setBrainStatus({ checked: true, ok: r.ok, mode: j.mode || 'real' })
+                      } catch {
+                        setBrainStatus({ checked: true, ok: false, mode: '' })
+                      }
+                    }}
+                    className="rounded-md bg-white/10 px-2 py-1 text-white/60 hover:text-white"
+                  >
+                    {brainStatus.checked ? (brainStatus.ok ? `Router ✓ (${brainStatus.mode})` : 'Router offline') : 'Test'}
+                  </button>
+                </div>
+                <p className="text-white/35">
+                  Starts from the router sidecar: python3 laya_server.py --mock (no deps) or without --mock for the real Laya model.
+                </p>
+              </div>
+            )}
           </div>
         }
       />
