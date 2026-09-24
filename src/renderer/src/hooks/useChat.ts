@@ -9,6 +9,7 @@ import type { AutomationPlan } from '../../../shared/types'
 import { getPreferences } from '../lib/preferences'
 import { readAgentSettings, isLocalProviderActive } from '../lib/agentSettings'
 import { planFromDecision, requestLocalBrain } from '../lib/localBrain'
+import { parseRemoteDesktopTask } from '../lib/remoteDesktopTask'
 import { resolveChatId, mergeChatMessages } from '../lib/chatConversation'
 
 export type ChatMsg = { id?: string; role: 'user' | 'assistant'; content: string }
@@ -28,6 +29,14 @@ export type UseChat = {
   // plan, approval + execution happen via a NATIVE Windows dialog (main process),
   // so it works identically from the main window and the floating overlay.
   send: (text: string) => Promise<void>
+  /**
+   * Consider an INBOUND shared-conversation message for a phone→desktop task
+   * proposal. Only acts on a valid `omi_desktop_task` envelope; ordinary chat
+   * text is ignored (returns false), so remote messages can't inject actions
+   * unless they use the explicit envelope. A proposal still goes through the
+   * same `tryPlan` + native-confirm gate as `send`. Returns true if handled.
+   */
+  handleRemoteProposal: (text: string) => Promise<boolean>
   /** Clear the thread to a fresh conversation (used by the overlay's Esc). */
   reset: () => void
 }
@@ -184,6 +193,49 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
     } catch {
       return { kind: 'error' }
     }
+  }
+
+  // A phone→desktop proposal that arrives in the shared conversation. Only the
+  // explicit envelope counts; a valid goal then goes through the SAME plan +
+  // native-confirm gate as a locally typed action (never a silent remote run).
+  const handleRemoteProposal = async (text: string): Promise<boolean> => {
+    const task = parseRemoteDesktopTask(text)
+    if (!task) return false
+    // Don't race an in-flight send.
+    if (sendingRef.current) return false
+
+    const goal = task.goal
+    const userMsg: ChatMsg = { id: crypto.randomUUID(), role: 'user', content: `📱 ${goal}` }
+    const baseHistory = history
+    setHistory((h) => [...h, userMsg])
+
+    const verdict = await tryPlan(goal)
+    if (verdict.kind === 'planned') {
+      const r = await window.omi.automationConfirmRun(verdict.plan)
+      const outMsg: ChatMsg = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: r.canceled
+          ? 'I left that remote request unapproved.'
+          : r.ok
+            ? 'Done.'
+            : `I couldn't finish that: ${r.message ?? 'a step failed'}`
+      }
+      setHistory((h) => [...h, outMsg])
+      void persistChat([...baseHistory, userMsg, outMsg])
+      return true
+    }
+    const note: ChatMsg = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content:
+        verdict.kind === 'error'
+          ? "I couldn't turn that remote request into a safe action, so I didn't do anything."
+          : "That remote request didn't look like a desktop action I can run, so I ignored it."
+    }
+    setHistory((h) => [...h, note])
+    void persistChat([...baseHistory, userMsg, note])
+    return true
   }
 
   const send = async (text: string): Promise<void> => {
@@ -445,5 +497,5 @@ export function useChat(opts?: { surface?: 'main' | 'overlay' }): UseChat {
     )
   }
 
-  return { history, sending, send, reset }
+  return { history, sending, send, handleRemoteProposal, reset }
 }
