@@ -7,6 +7,7 @@ import {
   getMonologurSettings
 } from '../../lib/monologurEngine'
 import { resumeAfterInteraction } from '../../lib/ttsService'
+import { omiApi } from '../../lib/apiClient'
 
 type MonologurStatus = 'idle' | 'listening' | 'thinking' | 'speaking'
 
@@ -15,12 +16,32 @@ export function MonologurHost(): React.JSX.Element | null {
   const [lastMessage, setLastMessage] = useState<string | null>(null)
   const [showMessage, setShowMessage] = useState(false)
   const [ttsProvider, setTtsProvider] = useState<'web' | 'deepgram'>('web')
+  const [addingTask, setAddingTask] = useState(false)
+  const [taskAdded, setTaskAdded] = useState(false)
 
   const handleMessage = useCallback((text: string) => {
     setLastMessage(text)
     setShowMessage(true)
+    setTaskAdded(false)
     setTimeout(() => setShowMessage(false), 10000)
   }, [])
+
+  // Turn a proactive Monologur insight into a real task the user can accept.
+  // Best-effort POST to the same /v1/action-items feed the Tasks page reads.
+  const addAsTask = useCallback(async () => {
+    if (!lastMessage || addingTask || taskAdded) return
+    setAddingTask(true)
+    try {
+      await omiApi.post('/v1/action-items', {
+        description: lastMessage.length > 240 ? `${lastMessage.slice(0, 240)}…` : lastMessage
+      })
+      setTaskAdded(true)
+    } catch (e) {
+      console.error('[monologur] add-as-task failed:', e)
+    } finally {
+      setAddingTask(false)
+    }
+  }, [lastMessage, addingTask, taskAdded])
 
   useEffect(() => {
     const handleInteraction = (): void => {
@@ -103,6 +124,13 @@ export function MonologurHost(): React.JSX.Element | null {
                 Monologur {isDeepgram ? '(Deepgram TTS)' : ''}
               </div>
               <div className="text-sm">{lastMessage}</div>
+              <button
+                onClick={() => void addAsTask()}
+                disabled={addingTask || taskAdded}
+                className="mt-2 rounded-md bg-white/20 px-2 py-1 text-xs font-medium text-white transition-opacity hover:bg-white/30 disabled:opacity-60"
+              >
+                {taskAdded ? '✓ Added to tasks' : addingTask ? 'Adding…' : '＋ Add as task'}
+              </button>
             </div>
             <button
               onClick={() => setShowMessage(false)}
